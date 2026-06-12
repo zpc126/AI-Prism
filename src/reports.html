@@ -1,0 +1,260 @@
+<!-- input: 报告 API 返回的自动化执行结果 -->
+<!-- output: 报告列表、执行详情、用例详情和截图预览 -->
+<!-- position: 独立测试报告查看页面 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prism - 测试报告</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fafafa; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 40px 24px; }
+    .card { background: #fff; border-radius: 12px; border: 1px solid #eee; padding: 20px; margin-bottom: 16px; }
+    .status-pass { color: #22c55e; }
+    .status-fail { color: #ef4444; }
+    .screenshot { max-width: 100%; border-radius: 8px; border: 1px solid #e5e7eb; cursor: pointer; }
+    .screenshot:hover { transform: scale(1.02); transition: transform 0.2s; }
+    .case-detail { margin: 0 0 12px 32px; padding: 12px 14px; border: 1px solid #f3f4f6; border-radius: 10px; background: #fafafa; }
+    .case-detail summary { cursor: pointer; font-size: 13px; font-weight: 500; color: #52525b; user-select: none; }
+    .case-detail-body { display: grid; gap: 10px; margin-top: 12px; }
+    .case-field { display: grid; grid-template-columns: 72px 1fr; gap: 12px; font-size: 13px; }
+    .case-field-label { color: #a1a1aa; }
+    .case-field-value, .case-steps { color: #3f3f46; }
+    .case-steps { margin-left: 18px; }
+    .case-steps li + li { margin-top: 4px; }
+    .lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 1000; align-items: center; justify-content: center; }
+    .lightbox.active { display: flex; }
+    .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="mb-8">
+      <h1 class="text-2xl font-semibold text-zinc-800">测试报告</h1>
+      <p id="report-time" class="text-sm text-zinc-400 mt-1"></p>
+    </header>
+
+    <!-- 统计卡片 -->
+    <div class="grid grid-cols-4 gap-4 mb-8" id="stats-grid">
+      <div class="card">
+        <div class="text-sm text-zinc-400">总用例</div>
+        <div class="text-3xl font-semibold" id="stat-total">0</div>
+      </div>
+      <div class="card">
+        <div class="text-sm text-zinc-400">通过</div>
+        <div class="text-3xl font-semibold status-pass" id="stat-passed">0</div>
+      </div>
+      <div class="card">
+        <div class="text-sm text-zinc-400">失败</div>
+        <div class="text-3xl font-semibold status-fail" id="stat-failed">0</div>
+      </div>
+      <div class="card">
+        <div class="text-sm text-zinc-400">通过率</div>
+        <div class="text-3xl font-semibold" id="stat-rate">0%</div>
+        <div class="h-1 bg-zinc-100 rounded mt-2">
+          <div id="rate-bar" class="h-1 bg-green-500 rounded" style="width: 0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 执行详情 -->
+    <h2 class="text-lg font-semibold text-zinc-800 mb-4">执行详情</h2>
+    <div id="results-list"></div>
+
+    <!-- 报告列表 -->
+    <h2 class="text-lg font-semibold text-zinc-800 mb-4 mt-12">历史报告</h2>
+    <div id="reports-list"></div>
+  </div>
+
+  <div class="lightbox" id="lightbox" onclick="this.classList.remove('active')">
+    <img id="lightbox-img" src="" alt="截图预览">
+  </div>
+
+  <script>
+    const API_BASE = '/api';
+
+    // 从 URL 获取报告 ID
+    const urlParams = new URLSearchParams(window.location.search);
+    const reportId = urlParams.get('id');
+
+    document.addEventListener('DOMContentLoaded', () => {
+      if (reportId) {
+        loadReport(reportId);
+      } else {
+        loadReportsList();
+      }
+    });
+
+    // 加载报告列表
+    async function loadReportsList() {
+      try {
+        const response = await fetch(`${API_BASE}/reports`);
+        const data = await response.json();
+
+        if (data.success && data.reports.length > 0) {
+          const html = data.reports.map(report => `
+            <div class="card cursor-pointer hover:border-zinc-300 transition-colors" onclick="location.href='?id=${report.id}'">
+              <div class="flex justify-between items-center">
+                <div>
+                  <h3 class="font-medium text-zinc-800">${escapeHtml(report.title)}</h3>
+                  <p class="text-sm text-zinc-400 mt-1">
+                    ${report.passed_cases}/${report.total_cases} 通过 · ${formatDuration(report.duration_ms)}
+                  </p>
+                </div>
+                <div class="text-sm text-zinc-400">
+                  ${formatDate(report.created_at)}
+                </div>
+              </div>
+            </div>
+          `).join('');
+          document.getElementById('reports-list').innerHTML = html;
+        } else {
+          document.getElementById('reports-list').innerHTML = '<p class="text-zinc-400 text-center py-8">暂无报告</p>';
+        }
+      } catch (error) {
+        console.error('加载报告列表失败:', error);
+      }
+    }
+
+    // 加载单个报告
+    async function loadReport(id) {
+      try {
+        const response = await fetch(`${API_BASE}/reports/${id}`);
+        const data = await response.json();
+
+        if (data.success) {
+          renderReport(data.report);
+        }
+      } catch (error) {
+        console.error('加载报告失败:', error);
+      }
+    }
+
+    function renderCaseDetail(result) {
+      const detail = result.case_detail || {};
+      const fallbackSteps = (result.steps || []).map(step => step.description).filter(Boolean);
+      const steps = Array.isArray(detail.steps) && detail.steps.length ? detail.steps : fallbackSteps;
+      const fields = [
+        detail.id || result.case_id ? ['用例 ID', detail.id || result.case_id] : null,
+        ['用例标题', detail.title || result.case_title],
+        result.category ? ['所属模块', result.category] : null,
+        result.priority ? ['优先级', result.priority] : null,
+        ['执行结果', result.status === 'passed' ? '通过' : result.status === 'failed' ? '失败' : result.status],
+        detail.reason ? ['设计理由', detail.reason] : null,
+        detail.source ? ['需求来源', detail.source] : null,
+        detail.expected ? ['预期结果', detail.expected] : null,
+        result.error_message ? ['失败原因', result.error_message] : null,
+      ].filter(Boolean);
+
+      if (!steps.length && !fields.length) return '';
+
+      const fieldRows = fields.map(([label, value]) => `
+        <div class="case-field">
+          <div class="case-field-label">${escapeHtml(label)}</div>
+          <div class="case-field-value">${escapeHtml(value)}</div>
+        </div>
+      `).join('');
+
+      const stepList = steps.length ? `
+        <div class="case-field">
+          <div class="case-field-label">测试步骤</div>
+          <ol class="case-steps">
+            ${steps.map(step => `<li>${escapeHtml(step)}</li>`).join('')}
+          </ol>
+        </div>
+      ` : '';
+
+      return `
+        <details class="case-detail" open>
+          <summary>测试用例详情</summary>
+          <div class="case-detail-body">
+            ${fieldRows}
+            ${stepList}
+          </div>
+        </details>
+      `;
+    }
+
+    // 渲染报告
+    function renderReport(report) {
+      // 统计
+      document.getElementById('stat-total').textContent = report.total_cases;
+      document.getElementById('stat-passed').textContent = report.passed_cases;
+      document.getElementById('stat-failed').textContent = report.failed_cases;
+
+      const rate = report.total_cases > 0 ? Math.round((report.passed_cases / report.total_cases) * 100) : 0;
+      document.getElementById('stat-rate').textContent = rate + '%';
+      document.getElementById('rate-bar').style.width = rate + '%';
+
+      // 时间
+      document.getElementById('report-time').textContent =
+        `${formatDate(report.started_at)} · 耗时 ${formatDuration(report.duration_ms)}`;
+
+      // 结果列表
+      const resultsHtml = (report.results || []).map(result => {
+        const stepsHtml = (result.steps || []).map(step => `
+          <div class="flex items-start gap-3 py-3 border-t border-zinc-50">
+            <div class="text-sm mt-0.5">${step.status === 'passed' ? '<span class="status-pass">✓</span>' : '<span class="status-fail">✗</span>'}</div>
+            <div class="flex-1">
+              <div class="text-sm text-zinc-700">${escapeHtml(step.description)}</div>
+              ${step.error_message ? `<div class="text-sm text-red-500 mt-1">${escapeHtml(step.error_message)}</div>` : ''}
+              ${step.screenshot_path ? `<img class="screenshot mt-2" src="${API_BASE}/reports/${report.id}/screenshots/${getFilename(step.screenshot_path)}" alt="截图" title="点击查看截图" onclick="showLightbox(this.src)">` : ''}
+            </div>
+            <div class="text-xs text-zinc-400">${formatDuration(step.duration_ms)}</div>
+          </div>
+        `).join('');
+
+        return `
+          <div class="card">
+            <div class="flex items-center gap-3 mb-3">
+              <div class="text-lg">${result.status === 'passed' ? '<span class="status-pass">✓</span>' : '<span class="status-fail">✗</span>'}</div>
+              <div>
+                <h3 class="font-medium text-zinc-800">${escapeHtml(result.case_title)}</h3>
+                <div class="flex gap-2 mt-1">
+                  ${result.category ? `<span class="text-xs px-2 py-0.5 bg-zinc-100 rounded">${escapeHtml(result.category)}</span>` : ''}
+                  ${result.priority ? `<span class="text-xs px-2 py-0.5 bg-zinc-100 rounded">${escapeHtml(result.priority)}</span>` : ''}
+                </div>
+              </div>
+              <div class="ml-auto text-sm text-zinc-400">${formatDuration(result.duration_ms)}</div>
+            </div>
+            ${renderCaseDetail(result)}
+            ${stepsHtml}
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('results-list').innerHTML = resultsHtml || '<p class="text-zinc-400 text-center py-8">暂无执行结果</p>';
+    }
+
+    // 工具函数
+    function escapeHtml(text) {
+      if (!text) return '';
+      return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function formatDuration(ms) {
+      if (!ms) return '-';
+      if (ms < 1000) return ms + 'ms';
+      return (ms / 1000).toFixed(1) + 's';
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return '-';
+      const d = new Date(dateStr.replace(' ', 'T') + 'Z');
+      return `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+
+    function getFilename(path) {
+      return path ? path.split('/').pop() : '';
+    }
+
+    function showLightbox(src) {
+      document.getElementById('lightbox-img').src = src;
+      document.getElementById('lightbox').classList.add('active');
+    }
+  </script>
+</body>
+</html>

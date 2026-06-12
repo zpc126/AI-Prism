@@ -1,0 +1,191 @@
+// input: Web/Electron 配置文件路径、环境变量
+// output: 当前激活的 LLM 提供商配置
+// position: 服务器端配置中心，支持 Web、Electron 和环境变量
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const defaultConfig = {
+  provider: 'openai',
+  providers: {
+    openai: {
+      name: 'OpenAI',
+      apiKey: '',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4'
+    },
+    anthropic: {
+      name: 'Anthropic',
+      apiKey: '',
+      model: 'claude-3-sonnet-20240229'
+    },
+    azure: {
+      name: 'Azure OpenAI',
+      apiKey: '',
+      endpoint: '',
+      deploymentName: ''
+    },
+    custom: {
+      name: '自定义',
+      apiKey: '',
+      baseUrl: '',
+      model: ''
+    }
+  }
+};
+
+function mergeConfig(defaultObj, userObj) {
+  const result = { ...defaultObj };
+  for (const key in userObj) {
+    const value = userObj[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = mergeConfig(defaultObj[key] || {}, value);
+    } else if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function getWebConfigPath() {
+  return process.env.SCOUT_CONFIG_PATH
+    ? path.resolve(process.env.SCOUT_CONFIG_PATH)
+    : path.join(__dirname, '../data/config.json');
+}
+
+function loadJsonConfig(configPath, label) {
+  try {
+    if (fs.existsSync(configPath)) {
+      return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    }
+  } catch (e) {
+    console.error(`读取${label}配置失败:`, e);
+  }
+  return null;
+}
+
+function loadWebConfig() {
+  return loadJsonConfig(getWebConfigPath(), ' Web');
+}
+
+function saveWebConfig(config) {
+  const configPath = getWebConfigPath();
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const merged = mergeConfig(defaultConfig, config || {});
+  fs.writeFileSync(configPath, JSON.stringify(merged, null, 2), {
+    encoding: 'utf-8',
+    mode: 0o600
+  });
+  return merged;
+}
+
+// Electron 配置文件路径
+function getElectronConfigPath() {
+  const platform = process.platform;
+  let userDataPath;
+  
+  switch (platform) {
+    case 'darwin':
+      userDataPath = path.join(os.homedir(), 'Library/Application Support/Prism');
+      break;
+    case 'win32':
+      userDataPath = path.join(process.env.APPDATA || '', 'Prism');
+      break;
+    case 'linux':
+      userDataPath = path.join(os.homedir(), '.config/Prism');
+      break;
+    default:
+      userDataPath = path.join(os.homedir(), '.prism');
+  }
+  
+  return path.join(userDataPath, 'config.json');
+}
+
+// 读取 Electron 配置
+function loadElectronConfig() {
+  return loadJsonConfig(getElectronConfigPath(), ' Electron');
+}
+
+function loadRuntimeConfig() {
+  return process.env.SCOUT_RUNTIME === 'electron'
+    ? loadElectronConfig()
+    : loadWebConfig();
+}
+
+function loadConfig() {
+  return mergeConfig(defaultConfig, loadRuntimeConfig() || {});
+}
+
+// 获取当前激活的 LLM 配置
+function getLLMConfig() {
+  // Web 与 Electron 配置隔离，避免 Web 接口暴露桌面端凭据
+  const savedConfig = loadRuntimeConfig();
+  
+  if (savedConfig && savedConfig.provider) {
+    const provider = savedConfig.provider;
+    const providerConfig = savedConfig.providers[provider] || {};
+    
+    // 检查是否有 API Key
+    if (providerConfig.apiKey) {
+      return {
+        provider,
+        apiKey: providerConfig.apiKey,
+        baseUrl: providerConfig.baseUrl || providerConfig.endpoint,
+        model: providerConfig.model,
+        deploymentName: providerConfig.deploymentName
+      };
+    }
+  }
+  
+  // 回退到环境变量
+  const provider = process.env.LLM_PROVIDER || 'openai';
+  
+  switch (provider) {
+    case 'openai':
+      return {
+        provider: 'openai',
+        apiKey: process.env.OPENAI_API_KEY,
+        baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+        model: process.env.OPENAI_MODEL || 'gpt-4'
+      };
+    case 'anthropic':
+      return {
+        provider: 'anthropic',
+        apiKey: process.env.ANTHROPIC_API_KEY,
+        model: process.env.ANTHROPIC_MODEL || 'claude-3-sonnet-20240229'
+      };
+    case 'azure':
+      return {
+        provider: 'azure',
+        apiKey: process.env.AZURE_API_KEY,
+        baseUrl: process.env.AZURE_ENDPOINT,
+        deploymentName: process.env.AZURE_DEPLOYMENT_NAME
+      };
+    case 'custom':
+      return {
+        provider: 'custom',
+        apiKey: process.env.CUSTOM_API_KEY,
+        baseUrl: process.env.CUSTOM_BASE_URL,
+        model: process.env.CUSTOM_MODEL
+      };
+    default:
+      return {
+        provider: 'openai',
+        apiKey: process.env.OPENAI_API_KEY,
+        baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+        model: process.env.OPENAI_MODEL || 'gpt-4'
+      };
+  }
+}
+
+module.exports = {
+  defaultConfig,
+  getLLMConfig,
+  loadConfig,
+  loadWebConfig,
+  saveWebConfig,
+  loadElectronConfig,
+  getWebConfigPath,
+  getElectronConfigPath
+};

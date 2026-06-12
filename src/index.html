@@ -1,0 +1,849 @@
+<!-- input: 用户需求、配置和自动化执行入口 -->
+<!-- output: Prism 主界面、画布、报告与大脑入口 -->
+<!-- position: 前端主页面结构 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prism</title>
+  <link rel="stylesheet" href="styles/tailwind-output.css">
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+<body class="home-container min-h-screen overflow-hidden">
+  
+  <!-- ========== 视图 1: 需求输入 ========== -->
+  <div id="view-input" class="view active">
+    <div class="h-screen flex flex-col items-center justify-center px-4">
+      <!-- 右上角按钮组 -->
+      <div class="fixed top-5 right-6 z-50 flex items-center gap-2">
+        <!-- 设置按钮 -->
+        <button id="btn-settings" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+            <circle cx="8" cy="8" r="2.5"/>
+            <path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.93 2.93l1.41 1.41M11.66 11.66l1.41 1.41M2.93 13.07l1.41-1.41M11.66 4.34l1.41-1.41"/>
+          </svg>
+          <span>设置</span>
+        </button>
+        
+        <!-- History 按钮 -->
+        <button id="btn-go-history" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="2" y="2" width="12" height="12" rx="2"/>
+            <line x1="5" y1="5" x2="11" y2="5"/>
+            <line x1="5" y1="8" x2="11" y2="8"/>
+            <line x1="5" y1="11" x2="8" y2="11"/>
+          </svg>
+          <span>history</span>
+        </button>
+      </div>
+
+      <!-- 标题区域 -->
+      <div class="mb-10 text-center">
+        <!-- Prism Logo + 标题 - 居中对称 -->
+        <div class="relative inline-block group">
+          <div class="flex flex-col items-center">
+            <button id="scout-logo" class="prism-logo-button" type="button" aria-label="进入 Prism 大脑">
+              <svg class="prism-logo-mark" viewBox="0 0 160 160" role="img" aria-hidden="true">
+                <defs>
+                  <linearGradient id="prismGlass" x1="36" y1="22" x2="124" y2="138" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#ffffff"/>
+                    <stop offset="0.52" stop-color="#f7f7f2"/>
+                    <stop offset="1" stop-color="#d6d3cc"/>
+                  </linearGradient>
+                  <linearGradient id="prismEdge" x1="20" y1="132" x2="140" y2="38" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#b8b2a7"/>
+                    <stop offset="0.5" stop-color="#ffffff"/>
+                    <stop offset="1" stop-color="#8f8b83"/>
+                  </linearGradient>
+                  <linearGradient id="prismLight" x1="10" y1="134" x2="144" y2="44" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#f2d7a2" stop-opacity="0"/>
+                    <stop offset="0.24" stop-color="#f2d7a2" stop-opacity="0.75"/>
+                    <stop offset="0.48" stop-color="#b8e0d2" stop-opacity="0.65"/>
+                    <stop offset="0.72" stop-color="#f0b7a8" stop-opacity="0.58"/>
+                    <stop offset="1" stop-color="#fff8d7" stop-opacity="0"/>
+                  </linearGradient>
+                  <filter id="prismShadow" x="-20%" y="-15%" width="140%" height="140%">
+                    <feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#18181b" flood-opacity="0.12"/>
+                  </filter>
+                </defs>
+                <path class="prism-aura" d="M17 126 C45 102, 82 111, 140 80" stroke="url(#prismLight)" stroke-width="9" stroke-linecap="round" fill="none"/>
+                <g filter="url(#prismShadow)">
+                  <path class="prism-face prism-face-left" d="M80 20 L24 122 L80 136 Z" fill="url(#prismGlass)"/>
+                  <path class="prism-face prism-face-right" d="M80 20 L136 122 L80 136 Z" fill="#f3f2ed"/>
+                  <path class="prism-face prism-face-front" d="M24 122 L80 86 L136 122 L80 136 Z" fill="#e7e4dc"/>
+                  <path class="prism-line" d="M80 20 L80 136 M24 122 L80 86 L136 122 M80 86 L80 136" fill="none" stroke="url(#prismEdge)" stroke-width="2" stroke-linejoin="round"/>
+                  <path class="prism-highlight" d="M76 26 L54 108" stroke="#fffdf7" stroke-width="5" stroke-linecap="round" opacity="0.86"/>
+                  <path class="prism-spectrum" d="M31 117 L78 91 L130 119" stroke="url(#prismLight)" stroke-width="4" stroke-linecap="round" fill="none"/>
+                </g>
+              </svg>
+            </button>
+            <h1 id="scout-title" class="text-5xl font-bold text-zinc-800 cursor-default">Prism</h1>
+          </div>
+          
+          <!-- Hover 提示 - 放在标题下方 -->
+          <div class="absolute left-1/2 -translate-x-1/2 top-full mt-1 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 whitespace-nowrap">
+            <span class="text-xs text-zinc-400 bg-white/80 backdrop-blur px-2 py-1 rounded">点击进入大脑</span>
+          </div>
+        </div>
+        
+        <p class="text-zinc-500 text-base mt-6">测试，交给 Prism</p>
+      </div>
+
+      <!-- 输入卡片 -->
+      <div class="w-full max-w-2xl">
+        <!-- Tab 切换 - Nothing 风格 -->
+        <div class="flex justify-center gap-1 mb-6">
+          <button class="tab-btn active px-4 py-2 text-sm rounded-md transition-colors" data-tab="cases">
+            生成用例
+          </button>
+          <button class="tab-btn px-4 py-2 text-sm rounded-md transition-colors" data-tab="analyze">
+            需求分析
+          </button>
+          <button class="tab-btn px-4 py-2 text-sm rounded-md transition-colors" data-tab="run">
+            自动测试
+          </button>
+          <button class="tab-btn px-4 py-2 text-sm rounded-md transition-colors" data-tab="regression">
+            Bug 回归
+          </button>
+          <button class="tab-btn px-4 py-2 text-sm rounded-md transition-colors" data-tab="report">
+            测试报告
+          </button>
+          <button class="tab-btn px-4 py-2 text-sm rounded-md transition-colors hidden" data-tab="eval">
+            评估
+          </button>
+        </div>
+        
+        <!-- 输入区域 -->
+        <div class="requirement-card">
+          <div class="p-7">
+            <textarea 
+              id="requirement-input"
+              class="w-full bg-transparent text-zinc-700 placeholder-zinc-400 resize-none focus:outline-none leading-relaxed"
+              style="min-height: 120px; font-size: 15px;"
+              placeholder="粘贴需求文本、飞书文档链接、Figma 链接，或直接描述你想测什么..."
+            ></textarea>
+            
+            <!-- 文件上传区域 -->
+            <div id="file-upload-area" class="mt-4 hidden">
+              <div class="flex flex-wrap gap-2" id="uploaded-files"></div>
+            </div>
+          </div>
+          
+          <div class="flex items-center justify-between px-7 py-4 border-t border-zinc-100">
+            <div class="flex items-center gap-2">
+              <!-- 上传按钮 -->
+              <label id="btn-upload" class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-700 hover:bg-zinc-50 rounded-md cursor-pointer transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z"/></svg>
+                <span>上传文件</span>
+                <input type="file" id="file-input" class="hidden" accept=".pdf,.docx,.doc,.html,.htm,.png,.jpg,.jpeg,.gif,.webp,.txt,.md" multiple>
+              </label>
+              
+              <span class="text-xs text-zinc-300">|</span>
+              <span class="text-xs text-zinc-400">支持</span>
+              <span class="px-2 py-0.5 bg-zinc-100 text-zinc-500 text-xs rounded">飞书文档</span>
+              <span class="px-2 py-0.5 bg-zinc-100 text-zinc-500 text-xs rounded">PDF</span>
+              <span class="px-2 py-0.5 bg-zinc-100 text-zinc-500 text-xs rounded">Word</span>
+              <span class="px-2 py-0.5 bg-zinc-100 text-zinc-500 text-xs rounded">HTML</span>
+              <span class="px-2 py-0.5 bg-zinc-100 text-zinc-500 text-xs rounded">图片</span>
+            </div>
+            
+            <button id="btn-start" class="btn-start" disabled>
+              开始
+            </button>
+          </div>
+        </div>
+        
+        <!-- Tab 描述 -->
+        <div class="mt-4 text-center">
+          <p id="tab-desc" class="text-xs text-zinc-400">生成结构化测试用例，输出为思维导图</p>
+          <p id="input-hint" class="text-xs mt-1"></p>
+        </div>
+      </div>
+      
+      <!-- 示例 -->
+      <div class="mt-8">
+        <p class="text-xs text-zinc-400 mb-3">试试这个</p>
+        <div class="flex flex-wrap justify-center gap-2">
+          <button class="example-btn px-3 py-1.5 text-xs text-zinc-500 bg-zinc-50 hover:bg-zinc-100 rounded-full transition-colors" data-example="登录供应链系统。系统地址：https://foodsc.data-match.net/。主要生成登录相关测试用例，覆盖：打开登录页、账号密码正常登录、账号为空、密码为空、账号密码错误、密码大小写/特殊字符、连续错误登录、验证码或滑块校验（如页面存在）、记住登录状态、登录后跳转首页、退出后重新访问受保护页面、登录态过期、重复打开多个标签页、网络异常或接口返回失败、移动端/小屏适配。请重点关注登录入口、错误提示、登录成功后的页面状态和权限拦截。">
+            登录供应链系统
+          </button>
+        </div>
+      </div>
+      
+      <div id="home-stats" class="home-stats" aria-label="数据统计">
+        <div class="home-stat-item">
+          <span id="stat-generated-cases" class="home-stat-value">—</span>
+          <span class="home-stat-label">生成用例</span>
+        </div>
+        <div class="home-stat-item">
+          <span id="stat-automation-runs" class="home-stat-value">—</span>
+          <span class="home-stat-label">自动化执行</span>
+        </div>
+        <div class="home-stat-item">
+          <span id="stat-model-calls" class="home-stat-value">—</span>
+          <span class="home-stat-label">模型调用</span>
+        </div>
+        <div class="home-stat-item">
+          <span id="stat-model-tokens" class="home-stat-value">—</span>
+          <span class="home-stat-label">Token</span>
+        </div>
+        <div class="home-stat-item">
+          <span id="stat-automation-reports" class="home-stat-value">—</span>
+          <span class="home-stat-label">自动化报告</span>
+        </div>
+        <div class="home-stat-item">
+          <span id="stat-regression-cases" class="home-stat-value">—</span>
+          <span class="home-stat-label">回归用例</span>
+        </div>
+      </div>
+      
+    </div>
+  </div>
+
+  <!-- ========== 视图 2: 分析引擎 ========== -->
+  <div id="view-engine" class="view">
+    <div class="h-screen flex flex-col">
+      <!-- 顶部状态栏 -->
+      <header class="h-14 top-bar flex items-center justify-between shrink-0" style="padding-left: 80px; padding-right: 20px;">
+        <div class="flex items-center gap-3">
+          <button id="btn-back" class="p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+          </button>
+          
+          <div class="flex items-center gap-2 max-w-md">
+            <div id="engine-dot" class="w-2.5 h-2.5 rounded-full bg-indigo-500 shrink-0"></div>
+            <p id="requirement-summary" class="text-sm text-zinc-500 truncate"></p>
+          </div>
+        </div>
+        
+        <div class="flex items-center gap-2">
+          <span id="engine-status" class="text-xs text-zinc-400"></span>
+        </div>
+      </header>
+
+      <!-- 画布主体 -->
+      <div class="flex-1 relative overflow-hidden">
+        <!-- 对话式工作区 -->
+        <div id="engine-center" class="absolute inset-0 flex items-center justify-center z-20">
+          <div class="w-full max-w-lg mx-auto px-6">
+            <!-- Prism 对话区 -->
+            <div id="scout-chat" class="space-y-4 mb-8">
+              <!-- Prism 消息会在这里动态插入 -->
+            </div>
+            
+            <!-- 输入框 - 用户可以和 Prism 对话 -->
+            <div id="chat-input-area" class="opacity-0 transition-opacity duration-300">
+              <div class="flex gap-2">
+                <input id="chat-input" type="text" class="flex-1 px-4 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400" placeholder="补充信息或直接回复...">
+                <button id="btn-chat-send" class="px-4 py-2.5 text-sm bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors">发送</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 画布容器 -->
+        <div id="canvas-container" class="absolute inset-0 cursor-grab active:cursor-grabbing">
+          <div id="canvas-grid-bg" class="absolute inset-0 canvas-grid"></div>
+          <div id="canvas-content" class="absolute inset-0"></div>
+        </div>
+        
+        <!-- 底部状态 - 固定在底部 -->
+        <div id="canvas-status-bar" class="fixed bottom-4 left-6 right-6 flex items-center justify-between z-30 pointer-events-none opacity-0 transition-opacity duration-300">
+          <span id="case-count" class="text-xs text-stone-400"></span>
+          <div class="flex items-center gap-3 pointer-events-auto">
+            <button id="btn-zoom-fit" class="text-xs text-zinc-400 hover:text-zinc-600 transition-colors">适应</button>
+            <span class="text-zinc-200">·</span>
+            <span id="zoom-level" class="text-xs text-zinc-400 w-10 text-right">100%</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- ========== 灵动岛（生成用例后显示）========== -->
+      <div id="dynamic-island" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 transition-all duration-500 ease-out hidden">
+        <!-- 收起状态 - 点击展开 -->
+        <div id="island-collapsed" class="island-collapsed cursor-pointer group">
+          <div class="flex items-center gap-3">
+            <!-- Prism Logo -->
+            <div class="w-7 h-7 rounded-full overflow-hidden">
+              <span class="prism-avatar" aria-hidden="true"></span>
+            </div>
+            
+            <!-- 状态文字 -->
+            <div class="flex items-center gap-1.5">
+              <span id="island-status-text" class="text-sm text-zinc-600">用例已就绪</span>
+              <span class="text-xs text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity">点击对话</span>
+            </div>
+            
+            <!-- 分隔线 -->
+            <div class="w-px h-4 bg-zinc-200"></div>
+            
+            <!-- 快捷操作 -->
+            <div class="flex items-center gap-1">
+              <button id="btn-island-copy" class="p-1.5 hover:bg-zinc-100 rounded-md transition-colors" title="复制用例">
+                <svg class="w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+              </button>
+              <button id="btn-island-run" class="px-2.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium rounded-md transition-colors">
+                自动测试
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 展开状态 -->
+        <div id="island-expanded" class="island-expanded hidden">
+          <!-- 头部 -->
+          <div class="flex items-center justify-between px-4 py-3">
+            <div class="flex items-center gap-2">
+              <div class="w-6 h-6 rounded-full overflow-hidden">
+                <span class="prism-avatar" aria-hidden="true"></span>
+              </div>
+              <span class="text-sm font-medium text-zinc-800">Prism</span>
+            </div>
+            <button id="btn-island-collapse" class="p-1 hover:bg-zinc-100 rounded-md transition-colors">
+              <svg class="w-4 h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          
+          <!-- 对话区域 -->
+          <div id="island-chat" class="flex-1 overflow-y-auto px-4 pb-4 space-y-3">
+            <!-- 欢迎消息 -->
+            <div class="island-message">
+              <div class="flex gap-2">
+                <div class="w-6 h-6 rounded-full overflow-hidden shrink-0">
+                  <span class="prism-avatar" aria-hidden="true"></span>
+                </div>
+                <div class="bg-zinc-50 rounded-2xl rounded-tl-md px-3.5 py-2.5 text-xs text-zinc-600 leading-relaxed">
+                  告诉我怎么调整用例
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 输入区域 -->
+          <div class="px-4 pb-4">
+            <div class="flex gap-2 items-center">
+              <input 
+                id="island-input" 
+                type="text" 
+                class="flex-1 px-4 py-2.5 bg-zinc-50 border-0 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-zinc-200 transition-all"
+                placeholder="输入调整内容..."
+              >
+              <button id="btn-island-send" class="w-9 h-9 bg-zinc-900 hover:bg-zinc-800 text-white rounded-full flex items-center justify-center transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 视图 3: Agent 大脑 ========== -->
+  <div id="view-brain" class="view">
+    <div class="h-screen flex flex-col">
+      <!-- 顶部导航 -->
+      <header class="h-14 top-bar flex items-center justify-between shrink-0" style="padding-left: 80px; padding-right: 20px;">
+        <div class="flex items-center gap-3">
+          <button id="btn-brain-back" class="p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+          </button>
+          <h2 class="text-base font-semibold text-zinc-800">Prism 的大脑</h2>
+          <span id="brain-stats" class="text-xs text-zinc-400 bg-zinc-100 px-2.5 py-1 rounded-full"></span>
+        </div>
+        <div class="flex items-center gap-2">
+        </div>
+      </header>
+      
+      <!-- 主体内容 -->
+      <div class="flex-1 flex overflow-hidden">
+        <!-- 左侧：对话区域 -->
+        <div class="w-96 border-r border-stone-100 flex flex-col bg-white">
+          <!-- 对话历史 -->
+          <div id="brain-chat" class="flex-1 overflow-y-auto p-5 space-y-4 brain-chat">
+            <!-- 欢迎消息 -->
+            <div class="chat-message flex gap-3">
+              <div class="w-10 h-10 rounded-2xl bg-zinc-100 flex items-center justify-center shrink-0 overflow-hidden">
+                <span class="prism-avatar" aria-hidden="true"></span>
+              </div>
+              <div class="chat-system p-5 max-w-xs">
+                <p class="text-sm text-stone-700 font-medium leading-relaxed">你好！我是 Prism 的大脑。</p>
+                <p class="text-sm text-stone-500 mt-3 leading-relaxed">你可以像教同事一样教我，比如：</p>
+                <ul class="mt-3 text-sm text-stone-500 space-y-2">
+                  <li class="flex items-start gap-2">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1.5 shrink-0"></span>
+                    "配权限要用管理员账号"
+                  </li>
+                  <li class="flex items-start gap-2">
+                    <span class="w-1.5 h-1.5 rounded-full bg-zinc-400 mt-1.5 shrink-0"></span>
+                    "测试环境切人要去 SSO"
+                  </li>
+                  <li class="flex items-start gap-2">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1.5 shrink-0"></span>
+                    "某个系统要先切特定角色的账号"
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 输入区域 -->
+          <div class="p-5 border-t border-stone-100 bg-white">
+            <div>
+              <input 
+                id="brain-input" 
+                type="text" 
+                class="w-full brain-input px-4 py-3.5 text-sm" 
+                placeholder="教我一条知识，按回车提交..."
+              >
+            </div>
+          </div>
+        </div>
+        
+        <!-- 右侧：知识图谱 -->
+        <div class="flex-1 flex flex-col" style="background: linear-gradient(135deg, #fffbf5 0%, #f5f0e8 100%);">
+          <!-- 标签筛选 -->
+          <div class="p-5 border-b border-stone-100 bg-white/80 backdrop-blur-sm">
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-semibold text-stone-700">知识图谱</h3>
+              <div id="brain-tags" class="flex flex-wrap gap-2">
+                <!-- 动态生成，含“全部” -->
+              </div>
+            </div>
+          </div>
+          
+          <!-- 图谱容器 -->
+          <div class="flex-1 relative">
+            <div id="knowledge-graph" class="absolute inset-0">
+              <svg id="graph-svg" class="w-full h-full"></svg>
+            </div>
+
+            <div class="graph-controls absolute left-5 bottom-5 z-20">
+              <button id="btn-graph-zoom-out" type="button" aria-label="缩小知识图谱">−</button>
+              <span id="graph-zoom-level">100%</span>
+              <button id="btn-graph-zoom-in" type="button" aria-label="放大知识图谱">+</button>
+              <button id="btn-graph-fit" type="button" class="graph-fit-button">适应</button>
+            </div>
+            <div class="graph-gesture-hint absolute right-5 bottom-5 z-10">
+              滚轮缩放 · 拖动画布 · 双击复位
+            </div>
+            
+            <!-- 碎片详情面板 -->
+            <div id="fragment-panel" class="fragment-panel absolute right-5 top-5 w-80 hidden">
+              <div class="p-6">
+                <div class="flex items-center justify-between mb-5">
+                  <h4 class="text-sm font-semibold text-stone-700">碎片详情</h4>
+                  <button id="btn-close-panel" class="text-stone-400 hover:text-stone-600 p-1.5 hover:bg-stone-50 rounded-lg transition-colors">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </button>
+                </div>
+                <p id="fragment-content" class="text-sm text-stone-600 mb-5 leading-relaxed"></p>
+                <div id="fragment-tags" class="flex flex-wrap gap-2 mb-5"></div>
+                <div class="text-xs text-stone-400 space-y-2 pt-4 border-t border-stone-100">
+                  <p>使用次数：<span id="fragment-usage" class="font-medium text-stone-500">0</span></p>
+                  <p>来源：<span id="fragment-source" class="font-medium text-stone-500">手动</span></p>
+                </div>
+                <div class="pt-4 border-t border-stone-100 mt-4">
+                  <button id="btn-delete-fragment" class="w-full text-xs text-red-400 hover:text-red-600 hover:bg-red-50 py-2 rounded-lg transition-colors">
+                    删除这条记忆
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 底部统计 -->
+          <div class="p-5 border-t border-stone-100 bg-white/80 backdrop-blur-sm">
+            <div class="flex items-center justify-between text-xs text-stone-400">
+              <span id="fragment-count">0 个碎片</span>
+              <span id="tag-count">0 个标签</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 代跑确认弹窗 ========== -->
+  <div id="run-modal" class="fixed inset-0 z-[100] hidden">
+    <!-- 背景遮罩 -->
+    <div class="absolute inset-0 bg-black/40 backdrop-blur-sm"></div>
+    
+    <!-- 弹窗内容 -->
+    <div class="absolute inset-0 flex items-center justify-center p-4">
+      <div class="run-modal-content bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+        <!-- 头部 -->
+        <div class="px-6 pt-6 pb-4">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-xl bg-zinc-100 flex items-center justify-center">
+              <svg class="w-5 h-5 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+            </div>
+            <div>
+              <h3 class="text-lg font-semibold text-stone-800">自动测试即将开始</h3>
+              <p class="text-sm text-stone-500">系统将接管浏览器执行测试</p>
+            </div>
+          </div>
+          
+          <!-- 执行流程说明 -->
+          <div class="space-y-3">
+            <div class="flex items-start gap-3">
+              <div class="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+                <span class="text-xs font-semibold text-amber-700">1</span>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-stone-700">获取大脑记忆</p>
+                <p class="text-xs text-stone-500">从知识库中获取相关的测试经验和账号信息</p>
+              </div>
+            </div>
+            
+            <div class="flex items-start gap-3">
+              <div class="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+                <span class="text-xs font-semibold text-amber-700">2</span>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-stone-700">规划执行路径</p>
+                <p class="text-xs text-stone-500">识别测试场景，确定需要访问的系统和步骤</p>
+              </div>
+            </div>
+            
+            <div class="flex items-start gap-3">
+              <div class="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+                <span class="text-xs font-semibold text-amber-700">3</span>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-stone-700">接管浏览器</p>
+                <p class="text-xs text-stone-500">使用本地浏览器，继承已有的登录状态</p>
+              </div>
+            </div>
+            
+            <div class="flex items-start gap-3">
+              <div class="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+                <span class="text-xs font-semibold text-amber-700">4</span>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-stone-700">执行自动化测试</p>
+                <p class="text-xs text-stone-500">Prism Engine 逐步执行页面 UI 操作</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 用例统计 -->
+        <div class="mx-6 mb-4 px-4 py-3 bg-stone-50 rounded-xl">
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-stone-500">待执行用例</span>
+            <span id="run-case-count" class="font-semibold text-stone-700">0 条</span>
+          </div>
+        </div>
+        
+        <!-- 目标 URL -->
+        <div class="mx-6 mb-4">
+          <label class="block text-xs text-stone-500 mb-1.5">测试地址</label>
+          <input id="run-target-url" type="text" placeholder="https://your-app.com" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-lg focus:outline-none focus:border-zinc-400 bg-white">
+          <p class="text-xs text-stone-400 mt-1.5">用例中没有具体 URL 的步骤会使用这个地址</p>
+        </div>
+        
+        <!-- 执行器选择 -->
+        <div class="mx-6 mb-4">
+          <label class="block text-xs text-stone-500 mb-1.5">执行模式</label>
+          <div class="flex gap-2">
+            <label class="flex-1 flex items-center gap-2 px-3 py-2.5 border border-stone-200 rounded-lg cursor-pointer hover:bg-stone-50 transition-colors">
+              <input type="radio" name="executor-mode" value="pi-engine" checked class="w-4 h-4 text-zinc-900">
+              <div>
+                <p class="text-sm font-medium text-stone-700">智能模式</p>
+                <p class="text-xs text-stone-400">理解意图，规划路径</p>
+              </div>
+            </label>
+            <label class="flex-1 flex items-center gap-2 px-3 py-2.5 border border-stone-200 rounded-lg cursor-pointer hover:bg-stone-50 transition-colors">
+              <input type="radio" name="executor-mode" value="enhanced" class="w-4 h-4 text-zinc-900">
+              <div>
+                <p class="text-sm font-medium text-stone-700">快速模式</p>
+                <p class="text-xs text-stone-400">直接执行，速度快</p>
+              </div>
+            </label>
+          </div>
+        </div>
+        
+        <!-- 底部按钮 -->
+        <div class="px-6 py-4 bg-stone-50 border-t border-stone-100 flex gap-3">
+          <button id="btn-run-cancel" class="flex-1 px-4 py-2.5 bg-white border border-stone-200 text-stone-600 text-sm font-medium rounded-xl hover:bg-stone-50 transition-colors">
+            取消
+          </button>
+          <button id="btn-run-confirm" class="flex-1 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-white text-sm font-medium rounded-xl transition-colors">
+            开始执行
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 视图 4: 评估 ========== -->
+  <div id="view-eval" class="view">
+    <div class="h-screen flex flex-col bg-zinc-50">
+      <!-- 顶部栏 -->
+      <header class="h-14 bg-white border-b border-zinc-200 flex items-center justify-between shrink-0 px-6">
+        <div class="flex items-center gap-3">
+          <button id="btn-eval-back" class="p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+          </button>
+          <h2 class="text-sm font-medium text-zinc-800">Prism 评估</h2>
+        </div>
+        <button id="btn-eval-new" class="px-3 py-1.5 text-sm bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors">
+          新建评估集
+        </button>
+      </header>
+
+      <!-- 主体 -->
+      <div class="flex-1 flex overflow-hidden">
+        <!-- 左侧: 评估集列表 -->
+        <div class="w-80 bg-white border-r border-zinc-200 flex flex-col shrink-0">
+          <div id="eval-dataset-list" class="flex-1 overflow-y-auto p-4 space-y-2">
+            <!-- 动态插入评估集 -->
+          </div>
+        </div>
+
+        <!-- 右侧: 详情/运行 -->
+        <div class="flex-1 flex flex-col">
+          <!-- 评估集详情 -->
+          <div id="eval-detail" class="flex-1 overflow-y-auto p-6">
+            <div class="text-center text-zinc-400 mt-20">
+              <p class="text-sm">选择或创建一个评估集</p>
+            </div>
+          </div>
+
+          <!-- 运行终端 -->
+          <div id="eval-terminal" class="hidden h-80 bg-zinc-900 border-t border-zinc-800 flex flex-col">
+            <div class="flex items-center justify-between px-4 py-2 border-b border-zinc-800">
+              <div class="flex items-center gap-2">
+                <div id="eval-terminal-dot" class="w-2.5 h-2.5 rounded-full bg-zinc-600"></div>
+                <span id="eval-terminal-title" class="text-xs text-zinc-400">运行日志</span>
+              </div>
+              <span id="eval-terminal-status" class="text-xs text-zinc-500"></span>
+            </div>
+            <div id="eval-terminal-content" class="flex-1 overflow-y-auto p-4 font-mono text-xs text-zinc-300 leading-relaxed">
+              <!-- 动态插入日志 -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 执行状态灵动岛 ========== -->
+  <div id="execution-island" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] hidden">
+    <!-- 收起状态（灵动岛） -->
+    <div id="exec-island-collapsed" class="island-container">
+      <div class="island-pill">
+        <!-- 执行中动画 -->
+        <div class="island-spinner">
+          <div class="island-spinner-dot"></div>
+        </div>
+        
+        <!-- 当前状态 -->
+        <div class="island-info">
+          <span id="exec-island-title" class="island-title">正在执行</span>
+          <span id="exec-island-subtitle" class="island-subtitle">准备中...</span>
+        </div>
+        
+        <!-- 进度指示 -->
+        <div class="island-progress">
+          <span id="exec-island-progress-text" class="island-progress-text">0/0</span>
+        </div>
+        
+        <!-- 展开按钮 -->
+        <button id="btn-exec-island-expand" class="island-expand-btn">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        
+        <!-- 停止按钮 -->
+        <button id="btn-exec-island-stop" class="island-stop-btn">
+          <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+      </div>
+      
+      <!-- 进度条 -->
+      <div class="island-progress-bar">
+        <div id="exec-island-progress-fill" class="island-progress-fill" style="width: 0%"></div>
+      </div>
+    </div>
+    
+    <!-- 展开状态（日志面板） -->
+    <div id="exec-island-expanded" class="island-expanded hidden">
+      <!-- 头部 -->
+      <div class="island-expanded-header">
+        <div class="flex items-center gap-2">
+          <div class="island-spinner">
+            <div class="island-spinner-dot"></div>
+          </div>
+          <span class="island-title">执行日志</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button id="btn-exec-island-collapse" class="island-collapse-btn">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 15l7-7 7 7"/></svg>
+          </button>
+          <button id="btn-exec-island-close" class="island-close-btn">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      
+      <!-- 日志列表 -->
+      <div id="exec-island-log-list" class="island-log-list">
+        <!-- 动态插入日志 -->
+      </div>
+      
+      <!-- 底部进度 -->
+      <div class="island-expanded-footer">
+        <div class="island-progress-bar">
+          <div id="exec-island-expanded-progress" class="island-progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="flex items-center justify-between mt-2">
+          <span id="exec-island-expanded-status" class="text-xs text-stone-500">准备中...</span>
+          <div class="flex items-center gap-3">
+            <button id="btn-exec-view-report" class="hidden text-xs font-medium text-emerald-600 hover:text-emerald-700">查看报告</button>
+            <span id="exec-island-expanded-count" class="text-xs font-medium text-stone-600">0/0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 首次使用引导 ========== -->
+  <div id="welcome-modal" class="fixed inset-0 z-[200] hidden">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
+    <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-xs overflow-hidden">
+        <!-- 内容 -->
+        <div class="px-6 pt-6 pb-4">
+          <h2 id="welcome-title" class="text-base font-medium text-zinc-800 mb-3"></h2>
+          <div id="welcome-content" class="overflow-hidden"></div>
+        </div>
+        
+        <!-- 进度点 -->
+        <div id="welcome-dots" class="flex justify-center gap-1.5 mb-4"></div>
+        
+        <!-- 按钮 -->
+        <div class="px-6 pb-6 flex gap-2">
+          <button id="welcome-skip" class="flex-1 px-3 py-2 text-xs text-zinc-500 hover:text-zinc-700 rounded-lg hover:bg-zinc-50 transition-colors">
+            跳过
+          </button>
+          <button id="welcome-next" class="flex-1 px-3 py-2 text-xs font-medium text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors">
+            下一步
+          </button>
+          <button id="welcome-settings" class="flex-1 px-3 py-2 text-xs font-medium text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors hidden">
+            配置模型
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 设置模态框 ========== -->
+  <div id="settings-modal" class="fixed inset-0 z-[100] hidden">
+    <!-- 背景遮罩 -->
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
+    
+    <!-- 模态框内容 -->
+    <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] overflow-hidden">
+        <!-- 头部 -->
+        <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-100">
+          <h2 class="text-lg font-semibold text-zinc-800">设置</h2>
+          <button id="btn-settings-close" class="p-1 text-zinc-400 hover:text-zinc-600 rounded-lg hover:bg-zinc-100 transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <!-- 内容区域 -->
+        <div class="px-6 py-4 overflow-y-auto max-h-[calc(80vh-140px)]">
+          <!-- 提供商选择 -->
+          <div class="mb-6">
+            <label class="block text-sm font-medium text-zinc-700 mb-2">模型提供商</label>
+            <div class="grid grid-cols-4 gap-2">
+              <button class="provider-btn px-3 py-2 text-sm rounded-lg border-2 border-zinc-200 hover:border-zinc-300 transition-colors" data-provider="openai">
+                OpenAI
+              </button>
+              <button class="provider-btn px-3 py-2 text-sm rounded-lg border-2 border-zinc-200 hover:border-zinc-300 transition-colors" data-provider="anthropic">
+                Anthropic
+              </button>
+              <button class="provider-btn px-3 py-2 text-sm rounded-lg border-2 border-zinc-200 hover:border-zinc-300 transition-colors" data-provider="azure">
+                Azure
+              </button>
+              <button class="provider-btn px-3 py-2 text-sm rounded-lg border-2 border-zinc-200 hover:border-zinc-300 transition-colors" data-provider="custom">
+                自定义
+              </button>
+            </div>
+          </div>
+          
+          <!-- API Key -->
+          <div class="mb-4">
+            <label class="block text-sm font-medium text-zinc-700 mb-1.5">API Key</label>
+            <input type="password" id="settings-api-key" 
+              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+              placeholder="sk-xxx">
+          </div>
+          
+          <!-- Base URL (OpenAI/Custom) -->
+          <div id="settings-base-url-group" class="mb-4">
+            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Base URL</label>
+            <input type="text" id="settings-base-url" 
+              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+              placeholder="https://api.openai.com/v1">
+          </div>
+          
+          <!-- Azure Endpoint -->
+          <div id="settings-azure-endpoint-group" class="mb-4 hidden">
+            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Endpoint</label>
+            <input type="text" id="settings-azure-endpoint" 
+              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+              placeholder="https://xxx.openai.azure.com/">
+          </div>
+          
+          <!-- Azure Deployment Name -->
+          <div id="settings-azure-deployment-group" class="mb-4 hidden">
+            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Deployment Name</label>
+            <input type="text" id="settings-azure-deployment" 
+              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+              placeholder="gpt-4">
+          </div>
+          
+          <!-- Model -->
+          <div id="settings-model-group" class="mb-4">
+            <label class="block text-sm font-medium text-zinc-700 mb-1.5">模型</label>
+            <input type="text" id="settings-model" 
+              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+              placeholder="gpt-4">
+          </div>
+          
+          <!-- 测试连接按钮 -->
+          <div class="mt-6">
+            <button id="btn-test-connection" class="w-full px-4 py-2.5 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors">
+              测试连接
+            </button>
+            <div id="test-connection-result" class="mt-2 text-sm text-center hidden"></div>
+          </div>
+        </div>
+        
+        <!-- 底部按钮 -->
+        <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-zinc-100">
+          <button id="btn-settings-cancel" class="px-4 py-2 text-sm text-zinc-600 hover:text-zinc-800 rounded-lg hover:bg-zinc-100 transition-colors">
+            取消
+          </button>
+          <button id="btn-settings-save" class="px-4 py-2 text-sm font-medium text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors">
+            保存
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="canvas.js"></script>
+  <script src="renderer.js"></script>
+  <script src="brain.js"></script>
+  <script src="eval.js"></script>
+  <script src="settings.js"></script>
+  <script src="welcome.js"></script>
+</body>
+</html>

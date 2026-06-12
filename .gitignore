@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+build/
+*.dmg
+*.exe
+*.AppImage
+
+# Data files (user-generated)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/reports/
+data/uploads/
+data/images/
+data/config.json
+
+# Screenshots
+server/data/
+
+# Test data (local testing artifacts)
+test-data/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Tailwind build (auto-generated)
+src/styles/tailwind-output.css
+src/styles/tailwind.js
+
+# Backup files
+*.bak
+
+# Scout config
+.scout
+
+# Test reports
+test-report.md

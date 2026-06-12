@@ -1,0 +1,230 @@
+<!-- input: Prism Agent 演示入口 -->
+<!-- output: Agent 能力演示页面 -->
+<!-- position: 前端 PI Agent 独立演示页 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prism Agent Demo</title>
+  <link rel="stylesheet" href="styles/pi-chat.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #0a0a0a;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      padding: 20px;
+      background: #111;
+      border-bottom: 1px solid #222;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .header p {
+      color: #888;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+
+    .main {
+      flex: 1;
+      display: flex;
+      padding: 20px;
+      gap: 20px;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .left-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .right-panel {
+      width: 400px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border-radius: 12px;
+      padding: 20px;
+      border: 1px solid #222;
+    }
+
+    .card h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: #fff;
+    }
+
+    #pi-chat-container {
+      flex: 1;
+      min-height: 500px;
+    }
+
+    .feature-list {
+      list-style: none;
+    }
+
+    .feature-list li {
+      padding: 12px 0;
+      border-bottom: 1px solid #222;
+      font-size: 14px;
+      color: #ccc;
+    }
+
+    .feature-list li:last-child {
+      border-bottom: none;
+    }
+
+    .feature-list li strong {
+      color: #4ade80;
+    }
+
+    .example-queries {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .example-query {
+      padding: 10px 12px;
+      background: #222;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #aaa;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .example-query:hover {
+      background: #2a2a2a;
+      color: #fff;
+    }
+
+    .status-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4ade80;
+      margin-right: 8px;
+    }
+
+    .status-indicator.offline {
+      background: #ef4444;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Prism Agent</h1>
+    <p>接入 PI SDK，获得超级智能体能力：规划、工具使用、推理、学习</p>
+  </div>
+
+  <div class="main">
+    <div class="left-panel">
+      <div class="card" id="pi-chat-container"></div>
+    </div>
+
+    <div class="right-panel">
+      <div class="card">
+        <h2>Prism Agent 能力</h2>
+        <ul class="feature-list">
+          <li><strong>规划能力</strong> - 自动分析需求，制定测试策略</li>
+          <li><strong>工具能力</strong> - 使用浏览器、数据库、API 工具</li>
+          <li><strong>推理能力</strong> - 分析失败原因，尝试恢复</li>
+          <li><strong>学习能力</strong> - 记忆经验，优化策略</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>示例查询</h2>
+        <div class="example-queries">
+          <div class="example-query" onclick="useExample(this)">
+            帮我测试登录功能，先分析一下有哪些测试点
+          </div>
+          <div class="example-query" onclick="useExample(this)">
+            生成用户注册的测试用例，包含正常流程和异常场景
+          </div>
+          <div class="example-query" onclick="useExample(this)">
+            打开百度首页，搜索"自动化测试"，验证搜索结果
+          </div>
+          <div class="example-query" onclick="useExample(this)">
+            查询数据库，验证用户表中是否有测试数据
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>系统状态</h2>
+        <div style="font-size: 14px; color: #aaa;">
+          <p><span class="status-indicator" id="status-dot"></span> Prism Agent: <span id="status-text">检查中...</span></p>
+          <p style="margin-top: 12px; color: #666; font-size: 12px;">
+            首次使用需要初始化 Prism Agent，可能需要几秒钟
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="pi-chat.js"></script>
+  <script>
+    // 检查 Prism Agent 状态
+    async function checkStatus() {
+      try {
+        const response = await fetch('/api/pi/status');
+        const data = await response.json();
+        
+        const dot = document.getElementById('status-dot');
+        const text = document.getElementById('status-text');
+        
+        if (data.status === 'ready') {
+          dot.className = 'status-indicator';
+          text.textContent = '就绪';
+        } else {
+          dot.className = 'status-indicator offline';
+          text.textContent = '未就绪';
+        }
+      } catch (error) {
+        document.getElementById('status-dot').className = 'status-indicator offline';
+        document.getElementById('status-text').textContent = '连接失败';
+      }
+    }
+
+    // 使用示例查询
+    function useExample(el) {
+      const input = document.getElementById('pi-input');
+      if (input) {
+        input.value = el.textContent.trim();
+        input.focus();
+      }
+    }
+
+    // 初始化
+    checkStatus();
+    setInterval(checkStatus, 30000);
+  </script>
+</body>
+</html>

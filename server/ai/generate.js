@@ -1,0 +1,958 @@
+// input: .env 配置、.scout 配置、OpenAI 兼容接口响应
+// output: generateCases(content) 返回分类的测试用例、analyzeRequirement(content) 返回需求分析结果
+// position: LLM 调用核心，支持多提供商、Base URL 规范化与流式响应校验
+
+const fs = require('fs');
+const path = require('path');
+const { getLLMConfig } = require('../config');
+
+function getChatCompletionsUrl(baseUrl) {
+  const normalized = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  try {
+    const url = new URL(normalized);
+    if (!url.pathname || url.pathname === '/') {
+      url.pathname = '/v1';
+      return `${url.toString().replace(/\/+$/, '')}/chat/completions`;
+    }
+  } catch (e) {}
+  return `${normalized}/chat/completions`;
+}
+
+const SYSTEM_PROMPT = `你是 QA 测试工程师。根据需求生成可自动执行的测试用例。
+
+【核心原则】
+每条用例的 steps 必须是浏览器可直接执行的动作，不要写抽象描述。
+
+【分类要求】
+按业务模块分类，每个模块包含：正常流程、异常场景、边界情况、风险点
+
+【输出格式】
+先输出分析结果，再逐条输出用例。
+
+1. 分析结果：用 ###ANALYSIS### 开头，后跟 JSON，包含识别到的核心模块
+格式：###ANALYSIS###{"modules":["模块1","模块2","模块3"]}
+
+2. 用例：每条用一行，用 ###CASE### 开头，后跟 JSON 对象
+用例之间不要输出任何其他内容。
+
+格式示例：
+###ANALYSIS###{"modules":["用户体系","商品体系","订单与支付"]}
+###CASE###{"category":"用户体系","id":"1","title":"验证邮箱注册","priority":"P0","reason":"注册是入口，得先打通","source":"需求第1点：用户注册支持手机号+验证码注册","steps":["打开注册页面","在邮箱输入框输入 test@example.com","在密码输入框输入 Test1234","点击注册按钮"],"expected":"页面跳转到首页，显示欢迎信息"}
+###CASE###{"category":"用户体系","id":"2","title":"验证重复邮箱注册","priority":"P1","reason":"重复注册容易出bug","source":"需求第1点：同一手机号不可重复注册","steps":["打开注册页面","在邮箱输入框输入 已注册@example.com","在密码输入框输入 Test1234","点击注册按钮"],"expected":"显示邮箱已被注册提示"}
+
+【steps 编写规则】
+1. 第一步必须是「打开 Web 测试入口」，不要写具体 URL
+2. 如果需求中提供了【一级产品名称】，必须保留真实导航层级：
+   - 第二步：在 Web 目录或导航中找到并进入 [一级产品名称]
+   - 第三步：在 [一级产品名称] 中找到并进入当前 category 对应的模块
+   - 然后再执行当前用例的具体操作
+   - category 是二级模块，禁止把它当作一级产品入口，也禁止跳过一级产品直接全局查找二级模块
+3. 每步必须是具体动作，格式为：动词 + 目标 + 内容
+4. 合格示例：
+   - "打开 Web 测试入口"
+   - "在 Web 目录中找到并进入 智能工作站"
+   - "在 智能工作站 中找到并进入 工位查询"
+   - "在用户名输入框输入 admin"
+   - "点击登录按钮"
+   - "在搜索框输入 iPhone"
+   - "点击第一个商品图片"
+   - "验证页面显示 退出登录"
+   - "等待 2 秒"
+5. 不合格示例（禁止）：
+   - "执行主要操作" （太抽象）
+   - "验证结果" （没有具体内容）
+   - "输入标准数据" （没有具体值）
+   - "提交" （没有说点什么按钮）
+   - "打开 https://example.com/login" （不要写 URL）
+   - "打开工位查询页面" （已提供一级产品名称时跳过了产品目录层级）
+
+【字段说明】
+- category: 所属模块名（中文）
+- id: 唯一编号
+- title: 一句话说明测试目标
+- priority: P0/P1/P2/P3
+- reason: 你为什么加这条用例，15字以内，语气像跟同事说话（比如“边界值容易漏”“这个场景用户常遇到”）
+- source: 这条用例对应需求的哪句话，简短引用（比如“需求第1点：用户注册支持手机号+验证码”）
+- steps: 测试步骤数组，每步必须可自动执行
+- expected: 预期结果，要具体（页面显示什么文字、跳转到哪里）
+
+【注意】
+1. 每条用例必须以 ###CASE### 开头，紧跟 JSON，无换行
+2. 每个模块至少 3 条用例
+3. reason 要真诚自然，不要用“核心链路”“关键场景”这类套话
+4. 不要输出任何 ###CASE### 之外的文字`
+
+// 解析 JSON 响应
+function parseJsonResponse(text) {
+  // 清理文本，提取可能的 JSON
+  let cleaned = text.trim();
+  
+  // 移除 markdown 代码块
+  cleaned = cleaned.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '');
+  
+  // 尝试直接解析
+  try {
+    const result = JSON.parse(cleaned);
+    if (result.categories) return result.categories;
+    if (Array.isArray(result)) return result;
+  } catch (e) {
+    console.log('直接解析失败，尝试修复...');
+  }
+  
+  // 尝试提取 JSON 对象
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      // 修复常见的 JSON 问题
+      let jsonStr = jsonMatch[0]
+        .replace(/,\s*}/g, '}')  // 移除对象末尾的逗号
+        .replace(/,\s*]/g, ']')  // 移除数组末尾的逗号
+        .replace(/\n/g, ' ')     // 移除换行
+        .replace(/\t/g, ' ');    // 移除制表符
+      
+      const result = JSON.parse(jsonStr);
+      if (result.categories) return result.categories;
+      if (Array.isArray(result)) return result;
+    } catch (e) {
+      console.log('JSON 修复失败:', e.message);
+    }
+  }
+  
+  // 最后尝试：提取数组
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    try {
+      const result = JSON.parse(arrayMatch[0]);
+      if (Array.isArray(result)) return result;
+    } catch (e) {}
+  }
+  
+  // 如果所有尝试都失败，返回示例数据
+  console.log('无法解析 LLM 返回，使用示例数据');
+  return generateMockCategories('');
+}
+
+// 读取 .scout 配置
+function loadScoutConfig() {
+  try {
+    const configPath = path.join(process.cwd(), '.scout');
+    if (fs.existsSync(configPath)) {
+      return fs.readFileSync(configPath, 'utf-8');
+    }
+  } catch (err) {}
+  return null;
+}
+
+function buildSystemPrompt() {
+  let prompt = SYSTEM_PROMPT;
+  const scoutConfig = loadScoutConfig();
+  if (scoutConfig) {
+    prompt += `\n\n用户配置：\n${scoutConfig}`;
+  }
+  return prompt;
+}
+
+// OpenAI / 兼容接口
+async function callOpenAI(content, apiKey, baseUrl, model) {
+  const baseURL = baseUrl || 'https://api.openai.com/v1';
+  
+  // 构建消息内容
+  let userContent;
+  if (content.match(/\.(png|jpg|jpeg|gif|webp)$/i) || content.startsWith('http')) {
+    userContent = [
+      { type: 'text', text: '请分析这个需求图片，生成测试用例。' },
+      { type: 'image_url', image_url: { url: content } }
+    ];
+  } else {
+    userContent = `需求：\n${content}`;
+  }
+  
+  // 使用 node-fetch 或内置 fetch
+  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+  
+  // 构建请求头（MIMO 用 api-key，其他用 Authorization）
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+  if (baseURL.includes('mimo') || baseURL.includes('xiaomi')) {
+    headers['api-key'] = apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  
+  // 添加超时控制
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
+  
+  let response;
+  try {
+    response = await fetchFn(getChatCompletionsUrl(baseURL), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: model || 'gpt-4',
+        messages: [
+          { role: 'system', content: buildSystemPrompt() },
+          { role: 'user', content: userContent }
+        ]
+      }),
+      signal: controller.signal
+    });
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') {
+      throw new Error('API 请求超时');
+    }
+    throw e;
+  }
+  clearTimeout(timeoutId);
+  
+  const responseText = await response.text();
+  let data;
+  try {
+    data = JSON.parse(responseText);
+  } catch (e) {
+    throw new Error(`模型接口返回了非 JSON 内容，请检查 Base URL（当前：${baseURL}）`);
+  }
+  if (!response.ok) {
+    throw new Error(data.error?.message || 'API 调用失败');
+  }
+
+  const contentText = data.choices?.[0]?.message?.content;
+  if (!contentText) throw new Error('模型接口未返回可解析的文本内容');
+  return parseJsonResponse(contentText);
+}
+
+// Anthropic
+async function callAnthropic(content, apiKey, model) {
+  let Anthropic;
+  try {
+    Anthropic = require('@anthropic-ai/sdk');
+  } catch (e) {
+    throw new Error('需要安装: npm install @anthropic-ai/sdk');
+  }
+  
+  const anthropic = new Anthropic({ apiKey });
+  const message = await anthropic.messages.create({
+    model: model || 'claude-3-sonnet-20240229',
+    max_tokens: 4096,
+    system: buildSystemPrompt(),
+    messages: [{ role: 'user', content: `需求：\n${content}` }]
+  });
+  
+  return parseJsonResponse(message.content[0].text);
+}
+
+// 主函数
+async function generateCases(content) {
+  const llmConfig = getLLMConfig();
+  const provider = llmConfig.provider;
+  console.log(`LLM 提供商: ${provider}`);
+  
+  try {
+    let categories;
+    
+    if (!llmConfig.apiKey) {
+      console.log('未配置 API Key，返回示例用例');
+      return generateMockCategories(content);
+    }
+    
+    switch (provider) {
+      case 'openai':
+      case 'custom':
+        categories = await callOpenAI(content, llmConfig.apiKey, llmConfig.baseUrl, llmConfig.model);
+        break;
+        
+      case 'anthropic':
+        categories = await callAnthropic(content, llmConfig.apiKey, llmConfig.model);
+        break;
+        
+      default:
+        throw new Error(`不支持的提供商: ${provider}`);
+    }
+    
+    return categories;
+    
+  } catch (error) {
+    console.error('AI 生成失败:', error.message);
+    return generateMockCategories(content);
+  }
+}
+
+// 示例用例
+function generateMockCategories(content) {
+  const id = Date.now().toString(36);
+  
+  return [
+    {
+      type: 'normal',
+      name: '正常场景',
+      cases: [
+        { id: `${id}-1`, title: '核心流程验证', priority: 'P0', steps: ['执行主要操作', '验证结果'], expected: '流程正常完成' },
+        { id: `${id}-2`, title: '标准输入处理', priority: 'P1', steps: ['输入标准数据', '提交'], expected: '数据正确处理' }
+      ]
+    },
+    {
+      type: 'exception',
+      name: '异常场景',
+      cases: [
+        { id: `${id}-3`, title: '空输入处理', priority: 'P1', steps: ['不输入任何内容', '提交'], expected: '显示必填提示' },
+        { id: `${id}-4`, title: '错误格式输入', priority: 'P1', steps: ['输入错误格式', '提交'], expected: '显示格式错误提示' }
+      ]
+    },
+    {
+      type: 'boundary',
+      name: '边界情况',
+      cases: [
+        { id: `${id}-5`, title: '最小值测试', priority: 'P2', steps: ['输入最小允许值', '提交'], expected: '正常处理' },
+        { id: `${id}-6`, title: '最大值测试', priority: 'P2', steps: ['输入最大允许值', '提交'], expected: '正常处理' }
+      ]
+    },
+    {
+      type: 'risk',
+      name: '风险点',
+      cases: [
+        { id: `${id}-7`, title: 'XSS 注入防护', priority: 'P1', steps: ['输入脚本标签', '提交'], expected: '内容被转义' },
+        { id: `${id}-8`, title: '并发操作', priority: 'P2', steps: ['同时提交多次'], expected: '只处理一次' }
+      ]
+    }
+  ];
+}
+
+// 流式生成用例
+async function generateCasesStream(content, onEvent, customSystemPrompt, options = {}) {
+  const llmConfig = getLLMConfig();
+  const apiKey = llmConfig.apiKey;
+  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
+  const model = llmConfig.model || 'gpt-4';
+
+  onEvent('progress', { message: '正在调用 AI...' });
+
+  // 使用 node-fetch 或内置 fetch
+  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+  
+  // 构建请求头（MIMO 用 api-key，其他用 Authorization）
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
+    headers['api-key'] = apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetchFn(getChatCompletionsUrl(baseUrl), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: customSystemPrompt || buildSystemPrompt() },
+        { role: 'user', content: `需求：\n${content}` }
+      ],
+      stream: true,
+      ...(options.maxTokens ? { max_tokens: options.maxTokens } : {})
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`API 调用失败: ${error}`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('text/event-stream')) {
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      throw new Error(`模型流式接口返回了非 SSE 内容，请检查 Base URL（当前：${baseUrl}）`);
+    }
+    const contentText = data.choices?.[0]?.message?.content;
+    if (!contentText) throw new Error('模型接口未返回可解析的文本内容');
+    if (options.allowEmpty) {
+      const replyMatch = contentText.match(/###REPLY###([^\n]*)/);
+      if (replyMatch?.[1]?.trim()) {
+        onEvent('reply', { text: replyMatch[1].trim() });
+      }
+      onEvent('complete', { categories: [] });
+      return;
+    }
+    onEvent('complete', { categories: parseJsonResponse(contentText) });
+    return;
+  }
+
+  // 处理流式响应 — 分隔符协议
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let tokenBuffer = '';
+  let rawText = '';
+  let sseBuffer = '';
+  let allCases = [];
+  let analysisSent = false;
+  let replySent = false;
+  const emittedUpdates = new Set();
+
+  onEvent('progress', { message: '正在分析需求...' });
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    sseBuffer += decoder.decode(value, { stream: true });
+    const lines = sseBuffer.split('\n');
+    sseBuffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') continue;
+
+      try {
+        const json = JSON.parse(data);
+        const delta = json.choices?.[0]?.delta?.content;
+        if (!delta) continue;
+
+        tokenBuffer += delta;
+        rawText += delta;
+
+        if (!replySent) {
+          const replyMarkerIdx = tokenBuffer.indexOf('###REPLY###');
+          if (replyMarkerIdx !== -1) {
+            const afterReplyMarker = tokenBuffer.substring(replyMarkerIdx + 11);
+            const replyEnd = afterReplyMarker.indexOf('\n');
+            if (replyEnd !== -1) {
+              const reply = afterReplyMarker.substring(0, replyEnd).trim();
+              if (reply) {
+                onEvent('reply', { text: reply });
+                replySent = true;
+              }
+            }
+          }
+        }
+
+        // 检测分析结果分隔符
+        const analysisMarkerIdx = tokenBuffer.indexOf('###ANALYSIS###');
+        if (analysisMarkerIdx !== -1 && !analysisSent) {
+          const afterMarker = tokenBuffer.substring(analysisMarkerIdx + 14); // 14 = '###ANALYSIS###'.length
+          const analysisMatch = afterMarker.match(/\{[\s\S]*?\}/);
+          if (analysisMatch) {
+            try {
+              const analysisData = JSON.parse(analysisMatch[0]);
+              if (analysisData.modules && Array.isArray(analysisData.modules)) {
+                console.log('[LLM] 发送分析结果:', analysisData.modules);
+                onEvent('analysis', { modules: analysisData.modules });
+                analysisSent = true;
+              }
+            } catch (e) {}
+          }
+        }
+
+        // 检测用例分隔符
+        while (true) {
+          const markerIdx = tokenBuffer.indexOf('###CASE###');
+          if (markerIdx === -1) break;
+
+          // 分隔符前的内容是上一条用例的剩余部分
+          const before = tokenBuffer.substring(0, markerIdx).trim();
+          tokenBuffer = tokenBuffer.substring(markerIdx + 10); // 10 = '###CASE###'.length
+
+          if (before) {
+            try {
+              const caseData = JSON.parse(before);
+              allCases.push(caseData);
+              onEvent('case', { case: caseData, totalCases: allCases.length });
+            } catch (e) {
+              // 上一条 JSON 不完整，跳过
+            }
+          }
+        }
+      } catch (e) {
+        // 忽略解析错误
+      }
+    }
+  }
+
+  // 处理缓冲区中最后一条（可能没有以分隔符结尾）
+  const remaining = tokenBuffer.trim();
+  if (!replySent && remaining) {
+    const replyMatch = remaining.match(/###REPLY###([^\n]*)/);
+    if (replyMatch?.[1]?.trim()) {
+      onEvent('reply', { text: replyMatch[1].trim() });
+      replySent = true;
+    }
+  }
+  if (!replySent && options.allowEmpty) {
+    const plainReply = rawText
+      .replace(/###CASE###[\s\S]*/g, '')
+      .replace(/###UPDATE###[\s\S]*/g, '')
+      .replace(/###ANALYSIS###[\s\S]*/g, '')
+      .replace(/###REPLY###/g, '')
+      .trim();
+    if (plainReply) {
+      onEvent('reply', { text: plainReply });
+      replySent = true;
+    }
+  }
+  for (const match of rawText.matchAll(/###UPDATE###\s*(\{[^\n]*\})/g)) {
+    try {
+      const updateData = JSON.parse(match[1]);
+      const updateKey = JSON.stringify(updateData);
+      if (updateData.id && !emittedUpdates.has(updateKey)) {
+        emittedUpdates.add(updateKey);
+        onEvent('update', { case: updateData });
+      }
+    } catch (e) {}
+  }
+  if (remaining && !remaining.includes('###UPDATE###')) {
+    // 尝试从剩余内容中提取 JSON
+    const jsonMatch = remaining.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const caseData = JSON.parse(jsonMatch[0]);
+        allCases.push(caseData);
+        onEvent('case', { case: caseData, totalCases: allCases.length });
+      } catch (e) {}
+    }
+  }
+
+  // 按 category 组装最终结果
+  const catMap = {};
+  for (const c of allCases) {
+    const catName = c.category || '未分类';
+    if (!catMap[catName]) catMap[catName] = { type: catName, name: catName, cases: [] };
+    catMap[catName].cases.push(c);
+  }
+  if (allCases.length === 0 && !options.allowEmpty) {
+    throw new Error('模型响应中没有解析到测试用例');
+  }
+  onEvent('complete', { categories: Object.values(catMap) });
+}
+
+// 通用 LLM 调用（用于碎片提取等）
+async function callLLM(systemPrompt, userContent) {
+  const llmConfig = getLLMConfig();
+  const apiKey = llmConfig.apiKey;
+  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
+  const model = llmConfig.model || 'gpt-4';
+  
+  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+  
+  const headers = { 'Content-Type': 'application/json' };
+  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
+    headers['api-key'] = apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  
+  const response = await fetchFn(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent }
+      ],
+      temperature: 0.3
+    })
+  });
+  
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || 'API 调用失败');
+  return data.choices[0].message.content;
+}
+
+// 专用分析调用（强制 JSON 输出）
+async function callLLMForAnalysis(systemPrompt, userContent) {
+  const llmConfig = getLLMConfig();
+  const apiKey = llmConfig.apiKey;
+  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
+  const model = llmConfig.model || 'gpt-4';
+  
+  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+  
+  const headers = { 'Content-Type': 'application/json' };
+  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
+    headers['api-key'] = apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  
+  // 尝试使用 response_format 强制 JSON 输出
+  const body = {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent }
+    ],
+    temperature: 0.1
+  };
+  
+  // 部分 API 支持 response_format，但可能导致错误，暂不使用
+  // if (!baseUrl.includes('mimo') && !baseUrl.includes('xiaomi')) {
+  //   body.response_format = { type: 'json_object' };
+  // }
+  
+  const response = await fetchFn(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body)
+  });
+  
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || 'API 调用失败');
+  return data.choices[0].message.content;
+}
+
+// 多模态 LLM 调用（支持图片）
+async function callLLMWithImage(systemPrompt, textContent, imageBase64, maxTokens = 1200) {
+  const llmConfig = getLLMConfig();
+  const apiKey = llmConfig.apiKey;
+  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
+  const model = llmConfig.model || 'gpt-4-vision-preview';
+  
+  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+  
+  const headers = { 'Content-Type': 'application/json' };
+  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
+    headers['api-key'] = apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  
+  // 构建多模态消息
+  const userContent = [
+    { type: 'text', text: textContent }
+  ];
+  
+  // 如果有图片，添加图片内容
+  if (imageBase64) {
+    userContent.push({
+      type: 'image_url',
+      image_url: { url: imageBase64 }
+    });
+  }
+  
+  const response = await fetchFn(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent }
+      ],
+      temperature: 0.3,
+      max_tokens: maxTokens
+    })
+  });
+  
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || 'API 调用失败');
+  return data.choices[0].message.content;
+}
+
+/**
+ * 理解图片内容
+ */
+async function understandImage(imageBase64, question = '请描述这张图片的内容') {
+  const systemPrompt = `你是一个图像理解助手。请仔细观察图片，用简洁准确的语言描述图片内容。
+如果图片中包含 UI 界面，请特别关注：
+- 页面布局和结构
+- 可交互元素（按钮、输入框、链接等）
+- 文字内容
+- 功能模块
+
+请用结构化的方式描述。`;
+  
+  return await callLLMWithImage(systemPrompt, question, imageBase64, 1000);
+}
+
+/**
+ * 从图片提取需求
+ */
+async function extractRequirementFromImage(imageBase64) {
+  const systemPrompt = `你是一个需求分析专家。用户会给你一张 UI 设计图或原型图，请从中提取出功能需求。
+
+输出格式：
+1. 页面/模块名称
+2. 功能点列表（每个功能点包含：功能名、描述、涉及的交互）
+3. 注意事项或边界条件
+
+请用清晰的结构输出。`;
+  
+  return await callLLMWithImage(systemPrompt, '请简洁提取这张图片中的功能需求和关键交互，不要展开解释', imageBase64, 1200);
+}
+
+// 需求分析
+const ANALYSIS_PROMPT = `你是一位资深测试工程师，正在审阅一份产品需求文档。
+
+你的任务是：像真正的测试专家一样，找出这个需求中的风险点、边界场景、需要和产品经理确认的问题。
+
+【重要：输出格式要求】
+你必须输出一个 JSON 数组，不要输出任何其他文字、解释或 markdown 格式。
+
+输出格式：
+[
+  {
+    "category": "风险类型",
+    "title": "问题标题",
+    "detail": "详细说明，包括为什么这是个问题、可能的影响",
+    "suggestion": "建议如何处理，或需要和产品确认什么"
+  }
+]
+
+【绝对重要】
+1. 直接输出 JSON 数组，不要用 \`\`\`json 包裹
+2. 不要在 JSON 前后输出任何文字
+3. 确保输出是合法的 JSON 格式
+4. 不要添加任何解释或说明
+5. 输出必须以 [ 开头，以 ] 结尾
+
+【风险类型说明】
+- 边界未定义：需求中没有明确定义的边界条件
+- 逻辑漏洞：需求逻辑上存在的漏洞或矛盾
+- 歧义描述：需求描述模糊，可能有多种理解
+- 遗漏场景：需求没有考虑到的用户场景
+- 技术风险：可能存在的技术实现风险
+- 体验问题：可能导致用户体验不佳的设计
+
+【分析原则】
+1. 不要只列正常流程，要找真正的问题
+2. 每个问题都要具体，不要泛泛而谈
+3. 要站在用户和测试的角度思考
+4. 提出的问题应该是产品经理需要回答的
+5. 不要编造需求中没有的内容，只分析现有需求
+
+【示例】
+假设需求是「用户登录功能，支持手机号+验证码登录，密码登录，第三方微信登录」
+
+好的分析：
+[
+  {
+    "category": "边界未定义",
+    "title": "验证码过期时间未说明",
+    "detail": "需求提到支持验证码登录，但没有说明验证码的有效期。过期后是否需要重新获取？错误提示是什么？",
+    "suggestion": "建议和产品确认：验证码有效期（如5分钟）、过期提示文案、是否需要倒计时显示"
+  },
+  {
+    "category": "遗漏场景",
+    "title": "多次验证码错误的处理",
+    "detail": "用户连续输入错误验证码时如何处理？是否有次数限制？是否需要锁定账号？",
+    "suggestion": "建议确认：错误次数限制（如5次）、锁定时长（如30分钟）、提示文案"
+  }
+]
+
+不好的分析（太笼统）：
+[
+  {
+    "category": "异常场景",
+    "title": "登录失败处理",
+    "detail": "登录可能失败",
+    "suggestion": "处理失败情况"
+  }
+]
+
+现在，请分析以下需求：`;
+
+// JSON 修复函数 - 修复字符串值中的未转义换行符等
+function fixJsonString(str) {
+  let result = '';
+  let inString = false;
+  let escapeNext = false;
+  
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    
+    if (escapeNext) {
+      result += char;
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\' && inString) {
+      result += char;
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"') {
+      inString = !inString;
+      result += char;
+      continue;
+    }
+    
+    if (inString) {
+      if (char === '\n') { result += '\\n'; continue; }
+      if (char === '\r') { result += '\\r'; continue; }
+      if (char === '\t') { result += '\\t'; continue; }
+    }
+    
+    result += char;
+  }
+  
+  // 修复尾部逗号
+  result = result.replace(/,\s*([}\]])/g, '$1');
+  
+  return result;
+}
+
+// 尝试多策略解析 JSON 数组
+function tryParseJsonArray(str) {
+  // 策略1: 直接解析
+  try {
+    const result = JSON.parse(str);
+    if (Array.isArray(result)) return result;
+  } catch (e) {}
+  
+  // 策略2: 修复后再解析
+  try {
+    const fixed = fixJsonString(str);
+    const result = JSON.parse(fixed);
+    if (Array.isArray(result)) return result;
+  } catch (e) {}
+  
+  // 策略3: 逐行尝试找到第一个有效 JSON 数组
+  // 有些 LLM 在 JSON 前后加了解释文字
+  const lines = str.split('\n');
+  let jsonStart = -1;
+  let jsonEnd = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim().startsWith('[')) jsonStart = i;
+    if (lines[i].trim().endsWith(']')) jsonEnd = i;
+  }
+  if (jsonStart >= 0 && jsonEnd >= jsonStart) {
+    try {
+      const candidate = lines.slice(jsonStart, jsonEnd + 1).join('\n');
+      const result = JSON.parse(candidate);
+      if (Array.isArray(result)) return result;
+    } catch (e) {}
+    // 修复后重试
+    try {
+      const candidate = fixJsonString(lines.slice(jsonStart, jsonEnd + 1).join('\n'));
+      const result = JSON.parse(candidate);
+      if (Array.isArray(result)) return result;
+    } catch (e) {}
+  }
+  
+  return null;
+}
+
+async function analyzeRequirement(content, retryCount = 0) {
+  console.log('[分析] 开始需求分析...');
+  const result = await callLLMForAnalysis(ANALYSIS_PROMPT, content);
+  console.log('[分析] LLM 返回结果长度:', result.length);
+  console.log('[分析] LLM 返回结果前200字符:', result.substring(0, 200));
+  
+  // 解析 JSON 结果
+  let cleaned = result.trim();
+  
+  // 尝试解析外层 JSON（某些 API 返回 {content: ...} 格式）
+  try {
+    const outer = JSON.parse(cleaned);
+    if (outer.content) {
+      cleaned = outer.content;
+    } else if (outer.choices?.[0]?.message?.content) {
+      cleaned = outer.choices[0].message.content;
+    }
+  } catch (e) {
+    // 不是外层 JSON，继续处理
+  }
+  
+  // 如果结果是被转义的 JSON 字符串，先解析它
+  if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+    try {
+      cleaned = JSON.parse(cleaned);
+    } catch (e) {
+      // 解析失败，继续
+    }
+  }
+  
+  // 移除 markdown 代码块标记（支持多种格式）
+  // 先尝试匹配完整的代码块
+  const codeBlockMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/i);
+  if (codeBlockMatch) {
+    cleaned = codeBlockMatch[1];
+  } else {
+    // 如果没有完整匹配，尝试移除开头和结尾的标记
+    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?\s*```$/i, '');
+  }
+  cleaned = cleaned.trim();
+  
+  // 提取 JSON 数组部分（可能包含在其他文本中）
+  const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    cleaned = jsonMatch[0];
+  }
+  
+  // 替换中文引号为标准 JSON 引号
+  cleaned = cleaned.replace(/[\u201c\u201d\u2018\u2019]/g, '"');
+  
+  // 尝试解析为 JSON 数组或对象
+  let issues = null;
+  
+  const trimmed = cleaned.trim();
+  
+  // 策略1: 直接作为数组解析
+  if (trimmed.startsWith('[')) {
+    console.log('[分析] 尝试解析 JSON 数组...');
+    issues = tryParseJsonArray(cleaned);
+    if (!issues) {
+      console.log('[分析] JSON 数组解析失败');
+    }
+  }
+  
+  // 策略2: 作为对象解析，提取数组
+  if (!issues && trimmed.startsWith('{')) {
+    try {
+      const fixed = fixJsonString(cleaned);
+      const obj = JSON.parse(fixed);
+      // 查找对象中的数组属性
+      for (const key of Object.keys(obj)) {
+        if (Array.isArray(obj[key]) && obj[key].length > 0) {
+          issues = obj[key];
+          break;
+        }
+      }
+    } catch (e) {}
+  }
+  
+  if (issues && issues.length > 0) {
+    console.log('[分析] JSON 解析成功，共 ' + issues.length + ' 个问题');
+    return [{
+      type: 'analysis',
+      name: '需求分析',
+      cases: issues.map((issue, i) => ({
+        id: `analysis-${i + 1}`,
+        title: issue.title,
+        priority: 'P1',
+        steps: [issue.detail],
+        expected: issue.suggestion,
+        category: issue.category
+      }))
+    }];
+  }
+  
+  // JSON 解析失败，如果还没重试过，再试一次
+  if (retryCount < 1) {
+    console.warn('[分析] JSON 解析失败，正在重试...');
+    return analyzeRequirement(content, retryCount + 1);
+  }
+  
+  console.warn('[分析] JSON 解析失败，返回原始文本');
+  return [{
+    type: 'analysis',
+    name: '需求分析',
+    cases: [{
+      id: 'analysis-1',
+      title: '分析结果',
+      priority: 'P1',
+      steps: [result],
+      expected: '请查看分析结果'
+    }]
+  }];
+}
+
+module.exports = { generateCases, generateCasesStream, analyzeRequirement, callLLM, callLLMWithImage, understandImage, extractRequirementFromImage };
