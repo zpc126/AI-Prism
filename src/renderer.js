@@ -915,6 +915,8 @@ function initRunModal() {
   const modal = $('#run-modal');
   const btnCancel = $('#btn-run-cancel');
   const btnConfirm = $('#btn-run-confirm');
+  const btnAdbConnect = $('#btn-adb-connect');
+  const btnAdbPair = $('#btn-adb-pair');
   
   // 取消
   btnCancel?.addEventListener('click', () => {
@@ -926,6 +928,9 @@ function initRunModal() {
     modal.classList.add('hidden');
     startExecution();
   });
+
+  btnAdbConnect?.addEventListener('click', connectWirelessAdb);
+  btnAdbPair?.addEventListener('click', pairWirelessAdb);
   
   // 点击背景关闭
   modal?.addEventListener('click', (e) => {
@@ -961,8 +966,96 @@ function showRunModal() {
   if (caseCount) {
     caseCount.textContent = `${allCases.length} 条`;
   }
+  refreshAdbDeviceStatus();
   
   modal.classList.remove('hidden');
+}
+
+async function refreshAdbDeviceStatus() {
+  const statusText = $('#adb-device-status');
+  const detailText = $('#adb-device-detail');
+  const dot = $('#adb-device-dot');
+  if (!statusText) return null;
+  try {
+    const response = await fetch(`${API_BASE}/device/adb`);
+    const data = await response.json();
+    const status = data.status || {};
+    if (status.connected) {
+      statusText.textContent = `Android 已连接${status.active?.model ? ` · ${status.active.model}` : ''}`;
+      detailText.textContent = status.active?.serial || '设备可用于手机端自动测试';
+      dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0';
+    } else {
+      statusText.textContent = status.available ? '未连接 Android 设备' : 'ADB 不可用';
+      detailText.textContent = status.error || '请插入 USB 数据线，或输入无线 ADB 地址';
+      dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0';
+    }
+    return status;
+  } catch (error) {
+    statusText.textContent = '设备状态检查失败';
+    detailText.textContent = error.message;
+    dot.className = 'w-2.5 h-2.5 rounded-full bg-red-400 shrink-0';
+    return null;
+  }
+}
+
+async function connectWirelessAdb() {
+  const button = $('#btn-adb-connect');
+  const input = $('#adb-wireless-address');
+  const address = input?.value.trim();
+  if (!address) {
+    $('#adb-device-detail').textContent = '请输入手机的 IP:端口';
+    return;
+  }
+  button.disabled = true;
+  button.textContent = '连接中...';
+  try {
+    const response = await fetch(`${API_BASE}/device/adb/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '连接失败');
+    await refreshAdbDeviceStatus();
+  } catch (error) {
+    $('#adb-device-status').textContent = '无线 ADB 连接失败';
+    $('#adb-device-detail').textContent = error.message;
+    $('#adb-device-dot').className = 'w-2.5 h-2.5 rounded-full bg-red-400 shrink-0';
+  } finally {
+    button.disabled = false;
+    button.textContent = '连接';
+  }
+}
+
+async function pairWirelessAdb() {
+  const button = $('#btn-adb-pair');
+  const address = $('#adb-pair-address')?.value.trim();
+  const code = $('#adb-pair-code')?.value.trim();
+  if (!address || !code) {
+    $('#adb-device-detail').textContent = '请输入配对地址和 6 位配对码';
+    return;
+  }
+  button.disabled = true;
+  button.textContent = '配对中...';
+  try {
+    const response = await fetch(`${API_BASE}/device/adb/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, code })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '配对失败');
+    $('#adb-device-status').textContent = '无线调试配对成功';
+    $('#adb-device-detail').textContent = '请使用上方连接地址继续连接设备';
+    $('#adb-device-dot').className = 'w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0';
+  } catch (error) {
+    $('#adb-device-status').textContent = '无线 ADB 配对失败';
+    $('#adb-device-detail').textContent = error.message;
+    $('#adb-device-dot').className = 'w-2.5 h-2.5 rounded-full bg-red-400 shrink-0';
+  } finally {
+    button.disabled = false;
+    button.textContent = '配对';
+  }
 }
 
 // ========== 执行用例 ==========
@@ -1238,6 +1331,11 @@ function addIslandLog(type, message) {
 async function startExecution() {
   const allCases = getAllCases();
   const total = allCases.length;
+  const hasMobileSteps = allCases.some(testCase =>
+    (testCase.steps || []).some(step =>
+      /\[(手机|移动端|小程序|H5|App)\]|手机端|移动端|小程序|Android|安卓|\bApp\b|\bH5\b/i.test(step)
+    )
+  );
   
   if (total === 0) {
     // 显示提示
@@ -1246,6 +1344,14 @@ async function startExecution() {
     updateIslandStatus('无用例', '请先生成测试用例');
     setTimeout(() => hideIsland(), 2000);
     return;
+  }
+  if (hasMobileSteps) {
+    const deviceStatus = await refreshAdbDeviceStatus();
+    if (!deviceStatus?.connected) {
+      updateChatIslandStatus('error', '请先连接 Android 真机');
+      showRunModal();
+      return;
+    }
   }
   
   // 显示灵动岛

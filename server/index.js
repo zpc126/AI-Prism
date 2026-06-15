@@ -34,6 +34,7 @@ let scriptRoutes;
 let gepRoutes;
 let parserRoutes;
 let evalRoutes;
+let deviceRoutes;
 
 try {
   brainRoutes = require('./brain/routes');
@@ -84,6 +85,13 @@ try {
   evalRoutes = express.Router();
 }
 
+try {
+  deviceRoutes = require('./device/routes');
+} catch (e) {
+  console.error('设备路由加载失败:', e.message);
+  deviceRoutes = express.Router();
+}
+
 let piRoutes;
 try {
   piRoutes = require('./pi/routes');
@@ -119,6 +127,9 @@ app.use('/api/files', parserRoutes);
 
 // 评估路由
 app.use('/api/eval', evalRoutes);
+
+// Android 真机设备管理
+app.use('/api/device', deviceRoutes);
 
 // PI Agent 路由
 app.use('/api/pi', piRoutes);

@@ -22,6 +22,7 @@ const {
   waitForElement,
   scroll,
   getSnapshot,
+  switchDevice,
 } = require('../pi/tools/browser');
 
 class PIEngineRunner {
@@ -134,7 +135,7 @@ class PIEngineRunner {
               if (
                 data.name === 'browser' &&
                 this.pendingBrowserAction &&
-                ['navigate', 'click', 'fill', 'wait', 'scroll'].includes(this.pendingBrowserAction.action)
+                ['switch_device', 'navigate', 'click', 'fill', 'wait', 'scroll'].includes(this.pendingBrowserAction.action)
               ) {
                 this.recordedActions.push({
                   action: this.pendingBrowserAction.action,
@@ -169,6 +170,8 @@ class PIEngineRunner {
     switch (toolName) {
       case 'navigate':
         return `打开 ${args?.target || '页面'}...`;
+      case 'switch_device':
+        return `切换到 ${/手机|mobile/i.test(args?.target || '') ? '手机端' : 'Web 端'}...`;
       case 'click':
         return `点一下 ${args?.target || '这个元素'}`;
       case 'fill':
@@ -207,6 +210,8 @@ class PIEngineRunner {
     switch (toolName) {
       case 'navigate':
         return '页面打开了';
+      case 'switch_device':
+        return `已切换到 ${result?.details?.deviceLabel || '目标设备'}`;
       case 'click':
         return '点完了';
       case 'fill':
@@ -235,6 +240,7 @@ class PIEngineRunner {
   getToolErrorMessage(toolName, error) {
     const messages = {
       'navigate': '页面打不开',
+      'switch_device': '设备切换失败',
       'click': '点不了，找不到这个元素',
       'fill': '填不进去',
       'screenshot': '截图失败了',
@@ -405,6 +411,9 @@ class PIEngineRunner {
           case 'navigate':
             await navigate(action.target);
             break;
+          case 'switch_device':
+            await switchDevice(action.target || action.value || 'web');
+            break;
           case 'click':
             await click(action.target);
             break;
@@ -484,6 +493,7 @@ class PIEngineRunner {
   describeScriptAction(action) {
     const labels = {
       navigate: '打开',
+      switch_device: '切换设备',
       click: '点击',
       fill: '输入',
       wait: '等待',
@@ -680,19 +690,22 @@ ${productName
 
 【执行要求】
 
-1. 第一项操作必须是获取当前页面快照并判断登录态
-2. 当前页面已经属于目标系统且已登录时，忽略步骤中重复的“打开测试入口”和“登录”，直接从当前模块继续
-3. 同一批用例共用浏览器会话；登录成功后不得在后续用例中重复登录
-4. 只有空白页、错误站点或明确停留在登录页时才能重新打开网址
-5. 普通点击或元素定位失败时，只能在当前页面重新获取快照并更换定位方式，禁止重新打开网址或重新登录
-6. 先用1-2句话说明这个用例要测什么，关键验证点是什么
-7. 规划具体的操作步骤（用什么URL、点什么按钮、填什么内容）
-8. 逐步执行，每一步都要说明：
+1. 识别步骤中的端类型标记和语义：[Web]、[后台] 表示 Web 端；[手机]、[移动端]、[小程序]、[H5]、Android、App 或“打开管理小程序”等明显移动端描述均表示 Android 真机
+2. 第一次操作前根据首个步骤调用 browser.switch_device；没有标记但出现小程序/手机/App/H5 时使用手机端，完全没有移动端语义时默认使用 Web 端
+3. 用例执行到另一端标记或明显端类型变化时，先调用 browser.switch_device 再继续；Web 与手机会话同时保留，禁止关闭另一端
+4. 每次切换设备后先获取当前页面快照并判断登录态
+5. 当前页面已经属于目标系统且已登录时，忽略步骤中重复的“打开测试入口”和“登录”，直接从当前模块继续
+6. 同一批用例的 Web 端和手机端各自复用浏览器会话；登录成功后不得重复登录
+7. 只有空白页、错误站点或明确停留在登录页时才能重新打开网址
+8. 普通点击或元素定位失败时，只能在当前设备页面重新获取快照并更换定位方式，禁止重新打开网址或重新登录
+9. 先用1-2句话说明这个用例要测什么，关键验证点是什么
+10. 规划具体的操作步骤（用什么URL、在哪个端、点什么按钮、填什么内容）
+11. 逐步执行，每一步都要说明：
    - 你在做什么
    - 你看到了什么
    - 为什么要这样做
-9. 如果遇到问题，说明你的判断和尝试
-10. 最后确认测试结果
+12. 如果遇到问题，说明你的判断和尝试
+13. 最后确认测试结果
 
 【示例】
 「这个用例是测加入购物车功能。关键是要验证选完规格、填完数量后，能成功加购。

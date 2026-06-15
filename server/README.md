@@ -33,6 +33,10 @@ server/
 ├── reports/              # 测试报告
 │   ├── report-store.js   # 报告、用例详情与截图索引存储
 │   └── routes.js         # API 路由与 HTML 报告渲染
+├── device/               # Android 真机
+│   ├── adb-device.js     # USB/无线 ADB、UIAutomator 操作与截图
+│   ├── routes.js         # 设备状态、连接和配对 API
+│   └── README.md
 ├── executor/             # 旧版执行器（兼容）
 │   ├── pi-runner.js      # PI 引擎适配器
 │   ├── auto-runner.js    # 自动化执行器
@@ -109,3 +113,6 @@ Prism 接入 PI SDK，获得超级智能体能力。
 | `/api/pi/chat` | POST | 对话式交互 |
 | `/api/pi/status` | GET | 获取 Prism Agent 状态 |
 | `/api/pi/reset` | POST | 重置 Prism Agent |
+| `/api/device/adb` | GET | 查询 Android 真机连接状态 |
+| `/api/device/adb/connect` | POST | 连接无线 ADB 设备 |
+| `/api/device/adb/pair` | POST | 使用 6 位配对码完成无线调试配对 |

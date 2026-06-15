@@ -13,6 +13,7 @@ const scriptWorkspaceState = {
 };
 
 const SCRIPT_ACTIONS = [
+  { value: 'switch_device', label: '切换设备', tone: 'rose', target: 'web 或 mobile', valueLabel: '无需填写' },
   { value: 'navigate', label: '打开页面', tone: 'blue', target: '页面 URL', valueLabel: '无需填写' },
   { value: 'click', label: '点击元素', tone: 'violet', target: '按钮、链接或文字', valueLabel: '无需填写' },
   { value: 'fill', label: '输入内容', tone: 'amber', target: '输入框名称', valueLabel: '要输入的内容' },
@@ -290,7 +291,7 @@ function renderVisualScriptEditor(draft) {
 
 function renderWorkspaceStep(step, index, total) {
   const config = SCRIPT_ACTIONS.find(item => item.value === step.action) || SCRIPT_ACTIONS[1];
-  const valueDisabled = ['navigate', 'click', 'assert_text'].includes(step.action);
+  const valueDisabled = ['switch_device', 'navigate', 'click', 'assert_text'].includes(step.action);
   return `
     <div class="script-action-card tone-${config.tone}" data-step-index="${index}">
       <div class="script-action-order">
@@ -342,7 +343,7 @@ function renderJsonScriptEditor(draft) {
         <textarea class="script-json-editor" spellcheck="false" aria-label="脚本 JSON">${escapeHtml(JSON.stringify(draftToCode(draft), null, 2))}</textarea>
       </div>
       <div class="script-code-help">
-        支持动作：navigate、click、fill、wait、scroll、assert_text。按 <kbd>⌘ S</kbd> 保存。
+        支持动作：switch_device、navigate、click、fill、wait、scroll、assert_text。按 <kbd>⌘ S</kbd> 保存。
       </div>
     </div>`;
 }

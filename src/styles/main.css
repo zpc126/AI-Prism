@@ -2928,6 +2928,7 @@ body {
 }
 
 .script-action-card.tone-blue { --step-color: #3b82f6; }
+.script-action-card.tone-rose { --step-color: #f43f5e; }
 .script-action-card.tone-violet { --step-color: #8b5cf6; }
 .script-action-card.tone-amber { --step-color: #f59e0b; }
 .script-action-card.tone-slate { --step-color: #64748b; }

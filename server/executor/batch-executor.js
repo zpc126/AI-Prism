@@ -61,7 +61,17 @@ class BatchExecutor {
     onLog({ type: 'divider', text: '' });
 
     // 初始化执行器（默认使用 PI Engine 智能模式）
-    const usePIEngine = options.usePIEngine !== false; // 默认 true
+    const hasMobileCase = cases.some(testCase => {
+      const steps = (testCase.steps || []).join('\n');
+      return /\[(手机|移动端|小程序|H5|App)\]|手机端|移动端|小程序|Android|安卓|\bApp\b|\bH5\b/i.test(steps);
+    });
+    const usePIEngine = hasMobileCase || options.usePIEngine !== false;
+    if (hasMobileCase && options.usePIEngine === false) {
+      onLog({
+        type: 'system',
+        text: '检测到 Android 手机步骤，已自动切换为支持 ADB 的 Prism Engine 智能模式',
+      });
+    }
     
     if (usePIEngine) {
       this.runner = new PIEngineRunner({

@@ -5,12 +5,33 @@
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
+const adbDevice = require('../../device/adb-device');
 
-// 浏览器实例管理
-let browser = null;
-let context = null;
-let page = null;
+// Web 与手机端分别保留独立会话，跨端用例切换时不会丢失当前页面。
+const browserSessions = {
+  web: { browser: null, context: null, page: null },
+  mobile: { browser: null, context: null, page: null },
+};
+let activeDevice = 'web';
 const browserProfileDir = path.join(__dirname, '../../data/browser-profile');
+
+const DEVICE_CONFIGS = {
+  web: {
+    label: 'Web',
+    profileDir: browserProfileDir,
+    viewport: { width: 1280, height: 800 },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  },
+  mobile: {
+    label: '手机',
+    profileDir: `${browserProfileDir}-mobile`,
+    viewport: { width: 390, height: 844 },
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    deviceScaleFactor: 3,
+    hasTouch: true,
+    isMobile: true,
+  },
+};
 
 // 截图目录
 const screenshotDir = path.join(__dirname, '../../data/screenshots');
@@ -19,44 +40,48 @@ if (!fs.existsSync(screenshotDir)) {
 }
 
 // 检查浏览器是否可用
-async function isBrowserAlive() {
+async function isBrowserAlive(device = activeDevice) {
+  const session = browserSessions[device];
   try {
-    if (!context) return false;
-    if (!page || page.isClosed()) {
-      page = context.pages().find(candidate => !candidate.isClosed()) || await context.newPage();
+    if (!session.context) return false;
+    if (!session.page || session.page.isClosed()) {
+      session.page = session.context.pages().find(candidate => !candidate.isClosed()) || await session.context.newPage();
     }
-    // 尝试执行简单操作来检测浏览器是否还活着
-    await page.evaluate(() => document.title);
+    await session.page.evaluate(() => document.title);
     return true;
   } catch {
     return false;
   }
 }
 
-// 重置浏览器状态
-function resetBrowserState() {
-  browser = null;
-  context = null;
-  page = null;
+function resetBrowserState(device) {
+  browserSessions[device] = { browser: null, context: null, page: null };
 }
 
 // 启动浏览器
-async function launchBrowser() {
-  // 检查现有浏览器是否还活着
-  if (!(await isBrowserAlive())) {
-    if (context) {
+async function launchBrowser(device = activeDevice) {
+  const normalizedDevice = device === 'mobile' ? 'mobile' : 'web';
+  activeDevice = normalizedDevice;
+  const config = DEVICE_CONFIGS[normalizedDevice];
+  const session = browserSessions[normalizedDevice];
+
+  if (!(await isBrowserAlive(normalizedDevice))) {
+    if (session.context) {
       try {
-        await context.close();
+        await session.context.close();
       } catch {}
     }
-    resetBrowserState();
+    resetBrowserState(normalizedDevice);
     
-    fs.mkdirSync(browserProfileDir, { recursive: true });
-    context = await chromium.launchPersistentContext(browserProfileDir, {
+    fs.mkdirSync(config.profileDir, { recursive: true });
+    const context = await chromium.launchPersistentContext(config.profileDir, {
       headless: false,
       channel: 'chrome',
-      viewport: { width: 1280, height: 800 },
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      viewport: config.viewport,
+      userAgent: config.userAgent,
+      deviceScaleFactor: config.deviceScaleFactor,
+      hasTouch: config.hasTouch,
+      isMobile: config.isMobile,
       args: [
         '--disable-blink-features=AutomationControlled',
         '--no-first-run',
@@ -64,34 +89,70 @@ async function launchBrowser() {
       ],
     });
 
-    browser = context.browser();
-    page = context.pages().find(candidate => !candidate.isClosed()) || await context.newPage();
+    const browser = context.browser();
+    const page = context.pages().find(candidate => !candidate.isClosed()) || await context.newPage();
+    browserSessions[normalizedDevice] = { browser, context, page };
 
-    // 监听浏览器关闭事件
     browser?.on('disconnected', () => {
-      resetBrowserState();
+      resetBrowserState(normalizedDevice);
     });
   }
-  return { browser, context, page };
+  return { ...browserSessions[normalizedDevice], device: normalizedDevice, deviceLabel: config.label };
+}
+
+async function switchDevice(device) {
+  const normalized = /手机|mobile|phone|ios|android/i.test(String(device || '')) ? 'mobile' : 'web';
+  activeDevice = normalized;
+  if (normalized === 'mobile') {
+    const status = adbDevice.getDeviceStatus();
+    if (!status.connected) {
+      throw new Error('未连接 Android 真机，请通过 USB 数据线或无线 ADB 连接');
+    }
+    return {
+      success: true,
+      action: 'switch_device',
+      device: 'mobile',
+      deviceLabel: `Android 真机${status.active?.model ? ` · ${status.active.model}` : ''}`,
+      serial: status.active?.serial,
+    };
+  }
+  const result = await launchBrowser('web');
+  return {
+    success: true,
+    action: 'switch_device',
+    device: normalized,
+    deviceLabel: DEVICE_CONFIGS[normalized].label,
+    viewport: DEVICE_CONFIGS[normalized].viewport,
+    url: result.page.url(),
+  };
 }
 
 // 关闭浏览器
 async function closeBrowser() {
-  if (context) {
-    await context.close();
+  for (const device of Object.keys(browserSessions)) {
+    const session = browserSessions[device];
+    if (session.context) {
+      try {
+        await session.context.close();
+      } catch {}
+    }
+    resetBrowserState(device);
   }
-  resetBrowserState();
+  activeDevice = 'web';
 }
 
 // 导航到 URL
 async function navigate(url) {
-  const { page } = await launchBrowser();
+  if (activeDevice === 'mobile') return adbDevice.navigate(url);
+  const { page, device, deviceLabel } = await launchBrowser();
   const currentUrl = page.url();
   if (currentUrl === url || currentUrl.replace(/\/+$/, '') === url.replace(/\/+$/, '')) {
     return {
       success: true,
       action: 'navigate',
       reused: true,
+      device,
+      deviceLabel,
       url: currentUrl,
       title: await page.title(),
     };
@@ -102,12 +163,15 @@ async function navigate(url) {
     success: true,
     url: page.url(),
     title: await page.title(),
+    device,
+    deviceLabel,
   };
 }
 
 // 点击元素
 async function click(target) {
-  const { page } = await launchBrowser();
+  if (activeDevice === 'mobile') return adbDevice.click(target);
+  const { page, device, deviceLabel } = await launchBrowser();
   
   const selectors = [
     () => page.getByRole('button', { name: new RegExp(target, 'i') }).first().click({ timeout: 3000 }),
@@ -126,6 +190,8 @@ async function click(target) {
         success: true,
         action: 'click',
         target,
+        device,
+        deviceLabel,
       };
     } catch {
       continue;
@@ -137,7 +203,8 @@ async function click(target) {
 
 // 填充输入框
 async function fill(target, value) {
-  const { page } = await launchBrowser();
+  if (activeDevice === 'mobile') return adbDevice.fill(target, value);
+  const { page, device, deviceLabel } = await launchBrowser();
   
   const selectors = [
     () => page.getByRole('textbox', { name: new RegExp(target || 'input', 'i') }).first(),
@@ -157,6 +224,8 @@ async function fill(target, value) {
         action: 'fill',
         target,
         value,
+        device,
+        deviceLabel,
       };
     } catch {
       continue;
@@ -171,12 +240,15 @@ async function fill(target, value) {
     target,
     value,
     method: 'keyboard',
+    device,
+    deviceLabel,
   };
 }
 
 // 截图
 async function screenshot(label = 'screenshot') {
-  const { page } = await launchBrowser();
+  if (activeDevice === 'mobile') return adbDevice.screenshot(label);
+  const { page, device, deviceLabel } = await launchBrowser();
   
   const timestamp = Date.now();
   const filename = `${label}_${timestamp}.png`;
@@ -190,12 +262,15 @@ async function screenshot(label = 'screenshot') {
     filename,
     filepath,
     url: page.url(),
+    device,
+    deviceLabel,
   };
 }
 
 // 获取页面快照（DOM 结构摘要）
 async function getSnapshot() {
-  const { page } = await launchBrowser();
+  if (activeDevice === 'mobile') return adbDevice.getSnapshot();
+  const { page, device, deviceLabel } = await launchBrowser();
   
   // 获取页面关键信息
   const snapshot = await page.evaluate(() => {
@@ -269,6 +344,8 @@ async function getSnapshot() {
   return {
     success: true,
     action: 'get_snapshot',
+    device,
+    deviceLabel,
     snapshot,
     summary: `页面: ${snapshot.title} | 按钮: ${snapshot.buttons.length} | 链接: ${snapshot.links.length} | 输入框: ${snapshot.inputs.length}`
   };
@@ -276,6 +353,7 @@ async function getSnapshot() {
 
 // 等待元素出现
 async function waitForElement(selector, timeout = 5000) {
+  if (activeDevice === 'mobile') return adbDevice.waitForElement(selector, timeout);
   const { page } = await launchBrowser();
   
   try {
@@ -288,6 +366,7 @@ async function waitForElement(selector, timeout = 5000) {
 
 // 滚动页面
 async function scroll(direction = 'down', amount = 500) {
+  if (activeDevice === 'mobile') return adbDevice.scroll(direction, amount);
   const { page } = await launchBrowser();
   
   await page.evaluate(({ dir, amt }) => {
@@ -308,14 +387,14 @@ async function scroll(direction = 'down', amount = 500) {
 const browserTool = {
   name: 'browser',
   label: '浏览器操作',
-  description: '执行浏览器操作，如打开页面、点击、输入、截图、查看页面快照等',
+  description: '执行 Web 或手机浏览器操作，可切换设备、打开页面、点击、输入、截图、查看页面快照等',
   parameters: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        description: '操作类型: navigate(导航), click(点击), fill(填写), screenshot(截图), get_snapshot(获取页面快照), wait(等待元素), scroll(滚动)',
-        enum: ['navigate', 'click', 'fill', 'screenshot', 'get_snapshot', 'wait', 'scroll'],
+        description: '操作类型: switch_device(切换 Web/手机), navigate(导航), click(点击), fill(填写), screenshot(截图), get_snapshot(获取页面快照), wait(等待元素), scroll(滚动)',
+        enum: ['switch_device', 'navigate', 'click', 'fill', 'screenshot', 'get_snapshot', 'wait', 'scroll'],
       },
       target: {
         type: 'string',
@@ -337,12 +416,16 @@ const browserTool = {
       try {
         if (attempt > 0) {
           console.log(`[Browser] 重试第 ${attempt} 次...`);
-          await page?.waitForTimeout(500);
+          const activeSession = browserSessions[activeDevice];
+          await activeSession.page?.waitForTimeout(500);
         }
         
         let result;
         
         switch (params.action) {
+          case 'switch_device':
+            result = await switchDevice(params.target || params.value || 'web');
+            break;
           case 'navigate':
             if (!params.target) {
               throw new Error('navigate 操作需要 target 参数（URL）');
@@ -425,4 +508,5 @@ module.exports = {
   getSnapshot,
   waitForElement,
   scroll,
+  switchDevice,
 };
