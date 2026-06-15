@@ -1710,7 +1710,7 @@ async function startAnalysis() {
       return;
     }
     if (state.activeTab === 'scripts') {
-      await openScriptLibrary();
+      await openScriptWorkspace();
       return;
     }
   
