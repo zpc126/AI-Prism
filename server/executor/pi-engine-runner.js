@@ -7,6 +7,22 @@ const { recallWithAssociations } = require('../brain/recall');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const {
+  getScriptById,
+  getScriptForCase,
+  upsertScriptFromExecution,
+  recordScriptRun,
+} = require('../storage/automation-scripts');
+const {
+  launchBrowser,
+  navigate,
+  click,
+  fill,
+  screenshot,
+  waitForElement,
+  scroll,
+  getSnapshot,
+} = require('../pi/tools/browser');
 
 class PIEngineRunner {
   constructor(options = {}) {
@@ -19,6 +35,10 @@ class PIEngineRunner {
     this._textBuffer = '';
     this._textFlushTimer = null;
     this._onLog = null;
+    this.preferredScriptId = options.preferredScriptId || null;
+    this.scriptOnly = Boolean(options.scriptOnly);
+    this.recordedActions = [];
+    this.pendingBrowserAction = null;
   }
 
   // 刷新文本缓冲
@@ -65,7 +85,8 @@ class PIEngineRunner {
 
   // 兼容 EnhancedRunner 的 launch 接口
   async launch(onLog) {
-    return this.init(onLog);
+    this._onLog = onLog;
+    onLog({ type: 'system', text: '正在检查可复用脚本...' });
   }
 
   // 初始化 Prism Agent
@@ -98,6 +119,9 @@ class PIEngineRunner {
             // 根据工具类型和参数生成人性化的描述
             const startMsg = this.getToolStartMessage(data.name, data.args);
             onLog({ type: 'info', text: startMsg });
+            if (data.name === 'browser') {
+              this.pendingBrowserAction = { ...(data.args || {}) };
+            }
             break;
           case 'tool_end':
             if (data.result?.details?.error) {
@@ -107,7 +131,19 @@ class PIEngineRunner {
               this.flushTextBuffer();
               const successMsg = this.getToolSuccessMessage(data.name, data.result);
               onLog({ type: 'success', text: successMsg });
+              if (
+                data.name === 'browser' &&
+                this.pendingBrowserAction &&
+                ['navigate', 'click', 'fill', 'wait', 'scroll'].includes(this.pendingBrowserAction.action)
+              ) {
+                this.recordedActions.push({
+                  action: this.pendingBrowserAction.action,
+                  target: this.pendingBrowserAction.target || '',
+                  value: this.pendingBrowserAction.value || '',
+                });
+              }
             }
+            if (data.name === 'browser') this.pendingBrowserAction = null;
             break;
         }
       }
@@ -225,6 +261,52 @@ class PIEngineRunner {
     onLog({ type: 'system', text: `--- 开始执行: ${testCase.title} ---` });
 
     try {
+      const savedScript = this.preferredScriptId
+        ? getScriptById(this.preferredScriptId)
+        : getScriptForCase(testCase);
+      if (savedScript?.enabled) {
+        onLog({
+          type: 'system',
+          text: `命中脚本库：${savedScript.name}，直接回放，不调用大模型`,
+        });
+        const replayResult = await this.executeSavedScript(savedScript, onLog);
+        recordScriptRun(savedScript.id, {
+          success: replayResult.success,
+          reportId: this.reportId,
+        });
+        if (replayResult.success) {
+          return {
+            status: 'passed',
+            steps: replayResult.steps,
+            durationMs: Date.now() - startTime,
+            scriptId: savedScript.id,
+            reusedScript: true,
+          };
+        }
+        if (this.scriptOnly) {
+          return {
+            status: 'failed',
+            steps: replayResult.steps,
+            errorMessage: replayResult.error,
+            durationMs: Date.now() - startTime,
+            scriptId: savedScript.id,
+            reusedScript: true,
+          };
+        }
+        onLog({
+          type: 'system',
+          text: '脚本回放失败，切换 Prism Agent 自愈；成功后会自动更新脚本',
+        });
+      } else if (this.scriptOnly) {
+        throw new Error('当前脚本不可用或已停用');
+      } else {
+        onLog({ type: 'info', text: '脚本库未命中，本次使用 Prism Agent 探索' });
+      }
+
+      if (!this.agent) {
+        await this.init(onLog);
+      }
+
       // ===== 阶段 1: 意图分析 + 知识检索 =====
       onLog({ type: 'thinking', text: '正在理解测试意图并检索相关知识...' });
       const knowledge = this.retrieveKnowledge(testCase);
@@ -244,11 +326,23 @@ class PIEngineRunner {
       onLog({ type: 'system', text: 'Prism Agent 开始自主执行...' });
       const result = await this.executeWithPIAgent(testCase, knowledge, onLog);
 
+      if (result.success && result.scriptActions?.length) {
+        const saved = upsertScriptFromExecution(testCase, result.scriptActions);
+        if (saved) {
+          recordScriptRun(saved.id, { success: true, reportId: this.reportId });
+          onLog({
+            type: 'success',
+            text: `已自动入库脚本：${saved.name}（${saved.steps.length} 个动作）`,
+          });
+        }
+      }
+
       return {
         status: result.success ? 'passed' : 'failed',
         steps: result.steps || [],
         errorMessage: result.error,
-        durationMs: Date.now() - startTime
+        durationMs: Date.now() - startTime,
+        scriptId: result.scriptId,
       };
 
     } catch (error) {
@@ -260,6 +354,93 @@ class PIEngineRunner {
         durationMs: Date.now() - startTime
       };
     }
+  }
+
+  async executeSavedScript(script, onLog) {
+    const stepResults = [];
+    await launchBrowser();
+
+    for (let index = 0; index < script.steps.length; index++) {
+      const action = script.steps[index];
+      const startedAt = Date.now();
+      const description = this.describeScriptAction(action);
+      onLog({ type: 'info', text: `脚本 ${index + 1}/${script.steps.length}：${description}` });
+
+      try {
+        switch (action.action) {
+          case 'navigate':
+            await navigate(action.target);
+            break;
+          case 'click':
+            await click(action.target);
+            break;
+          case 'fill':
+            await fill(action.target, action.value || '');
+            break;
+          case 'wait':
+            await waitForElement(action.target);
+            break;
+          case 'scroll':
+            await scroll(action.target || 'down', parseInt(action.value, 10) || 500);
+            break;
+          case 'assert_text': {
+            const snapshotResult = await getSnapshot();
+            const snapshot = snapshotResult.snapshot || {};
+            const pageText = [
+              ...(snapshot.visibleText || []),
+              ...(snapshot.headings || []).map(item => item.text),
+              ...(snapshot.buttons || []).map(item => item.text),
+              ...(snapshot.links || []).map(item => item.text),
+            ].filter(Boolean).join('\n');
+            if (!pageText.includes(action.target)) {
+              throw new Error(`页面未找到文本：${action.target}`);
+            }
+            break;
+          }
+          default:
+            throw new Error(`不支持的脚本动作：${action.action}`);
+        }
+        stepResults.push({
+          stepIndex: index + 1,
+          description,
+          action: JSON.stringify(action),
+          status: 'passed',
+          durationMs: Date.now() - startedAt,
+        });
+        onLog({ type: 'success', text: `脚本步骤 ${index + 1} 完成` });
+      } catch (error) {
+        const captured = await screenshot(`script_error_${index + 1}`).catch(() => null);
+        stepResults.push({
+          stepIndex: index + 1,
+          description,
+          action: JSON.stringify(action),
+          status: 'failed',
+          screenshotPath: captured?.filepath || null,
+          errorMessage: error.message,
+          durationMs: Date.now() - startedAt,
+        });
+        return { success: false, steps: stepResults, error: error.message };
+      }
+    }
+
+    const captured = await this.takeScreenshot('script_final');
+    if (stepResults.length > 0 && captured?.filepath) {
+      stepResults[stepResults.length - 1].screenshotPath = captured.filepath;
+    }
+    return { success: true, steps: stepResults };
+  }
+
+  describeScriptAction(action) {
+    const labels = {
+      navigate: '打开',
+      click: '点击',
+      fill: '输入',
+      wait: '等待',
+      scroll: '滚动',
+      assert_text: '验证页面文本',
+    };
+    const value = action.action === 'fill' && action.value ? `：${action.value}` : '';
+    return `${labels[action.action] || action.action} ${action.target || ''}${value}`.trim();
   }
 
   // 从大脑检索知识
@@ -328,7 +509,8 @@ class PIEngineRunner {
 
   // 让 PI Agent 自主执行
   async executeWithPIAgent(testCase, knowledge, onLog) {
-    const steps = [];
+    this.recordedActions = [];
+    this.pendingBrowserAction = null;
 
     // 检查是否被停止
     if (this.stopped) {
@@ -360,7 +542,11 @@ class PIEngineRunner {
         durationMs: 0,
       }));
 
-      return { success: true, steps: completedSteps };
+      return {
+        success: true,
+        steps: completedSteps,
+        scriptActions: [...this.recordedActions],
+      };
     } catch (error) {
       let errorScreenshot = null;
       if (!this.stopped) {
@@ -496,6 +682,8 @@ ${productName
       await this.agent.dispose();
       this.agent = null;
     }
+    const { closeBrowser } = require('../pi/tools/browser');
+    await closeBrowser();
   }
 }
 

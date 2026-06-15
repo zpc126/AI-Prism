@@ -67,8 +67,13 @@ class BatchExecutor {
       this.runner = new PIEngineRunner({
         reportId: report.id,
         reportDir: this.reportDir,
+        preferredScriptId: options.preferredScriptId,
+        scriptOnly: options.scriptOnly,
       });
-      onLog({ type: 'system', text: '使用 Prism Engine 智能模式' });
+      onLog({
+        type: 'system',
+        text: options.scriptOnly ? '使用脚本库直接回放模式' : '使用 Prism Engine 智能模式',
+      });
     } else {
       this.runner = new EnhancedRunner({
         reportId: report.id,
@@ -126,6 +131,7 @@ class BatchExecutor {
               resultId,
               stepIndex: step.stepIndex,
               description: step.description,
+              action: step.action,
               status: step.status,
               screenshotPath: step.screenshotPath,
               errorMessage: step.errorMessage,

@@ -22,9 +22,15 @@ const { executeCases } = require('./executor/pi-runner');
 const { scrapeUrl, isUrlInput, extractUrls } = require('./scraper/url-scraper');
 const { recallWithAssociations, recordRecallUsage } = require('./brain/recall');
 const { incrementStat, getHomeStats, estimateTokens } = require('./storage/stats');
+const {
+  setCurrentExecutor,
+  getCurrentExecutor,
+  clearCurrentExecutor,
+} = require('./executor/execution-state');
 let brainRoutes;
 let sessionRoutes;
 let reportRoutes;
+let scriptRoutes;
 let gepRoutes;
 let parserRoutes;
 let evalRoutes;
@@ -48,6 +54,13 @@ try {
 } catch (e) {
   console.error('报告路由加载失败:', e.message);
   reportRoutes = express.Router();
+}
+
+try {
+  scriptRoutes = require('./storage/script-routes');
+} catch (e) {
+  console.error('脚本库路由加载失败:', e.message);
+  scriptRoutes = express.Router();
 }
 
 try {
@@ -94,6 +107,9 @@ app.use('/api/sessions', sessionRoutes);
 
 // 报告路由
 app.use('/api/reports', reportRoutes);
+
+// 自动化脚本库路由
+app.use('/api/scripts', scriptRoutes);
 
 // GEP 路由
 app.use('/api/gep', gepRoutes);
@@ -307,9 +323,6 @@ app.post('/api/generate-cases-stream', async (req, res) => {
   res.end();
 });
 
-// 当前执行器实例
-let currentExecutor = null;
-
 // 执行用例 - 调用批量执行器（支持截图报告）
 app.post('/api/execute', async (req, res) => {
   try {
@@ -320,7 +333,7 @@ app.post('/api/execute', async (req, res) => {
     
     const { BatchExecutor } = require('./executor/batch-executor');
     const executor = new BatchExecutor();
-    currentExecutor = executor;
+    setCurrentExecutor(executor);
     let responseFinished = false;
     
     // 设置 SSE 响应头
@@ -331,9 +344,9 @@ app.post('/api/execute', async (req, res) => {
     });
 
     res.on('close', () => {
-      if (!responseFinished && currentExecutor === executor) {
+      if (!responseFinished && getCurrentExecutor() === executor) {
         console.log('[Server] 执行连接已关闭，自动停止任务');
-        currentExecutor = null;
+        clearCurrentExecutor(executor);
         executor.stop().catch(error => {
           console.error('[Server] 连接关闭后停止任务失败:', error);
         });
@@ -351,15 +364,13 @@ app.post('/api/execute', async (req, res) => {
       res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
     } finally {
       responseFinished = true;
-      if (currentExecutor === executor) {
-        currentExecutor = null;
-      }
+      clearCurrentExecutor(executor);
     }
     
     res.end();
   } catch (error) {
     console.error('执行失败:', error);
-    currentExecutor = null;
+    clearCurrentExecutor();
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -367,11 +378,11 @@ app.post('/api/execute', async (req, res) => {
 // 停止执行
 app.post('/api/stop', async (req, res) => {
   try {
-    if (currentExecutor) {
-      const executor = currentExecutor;
-      currentExecutor = null;
+    const activeExecutor = getCurrentExecutor();
+    if (activeExecutor) {
+      clearCurrentExecutor(activeExecutor);
       console.log('[Server] 用户请求停止执行');
-      await executor.stop();
+      await activeExecutor.stop();
       console.log('[Server] 执行已停止');
       res.json({ success: true, message: '已停止执行' });
     } else {
@@ -429,12 +440,12 @@ app.post('/api/execute-command-stream', async (req, res) => {
 
   const { BatchExecutor } = require('./executor/batch-executor');
   const executor = new BatchExecutor();
-  currentExecutor = executor;
+  setCurrentExecutor(executor);
   let responseFinished = false;
 
   res.on('close', () => {
-    if (!responseFinished && currentExecutor === executor) {
-      currentExecutor = null;
+    if (!responseFinished && getCurrentExecutor() === executor) {
+      clearCurrentExecutor(executor);
       executor.stop().catch(error => console.error('[Server] 单用例连接关闭后停止失败:', error));
     }
   });
@@ -461,7 +472,7 @@ app.post('/api/execute-command-stream', async (req, res) => {
     res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
   } finally {
     responseFinished = true;
-    if (currentExecutor === executor) currentExecutor = null;
+    clearCurrentExecutor(executor);
   }
 
   res.end();
@@ -658,7 +669,7 @@ app.post('/api/config/reload', (req, res) => {
 
 function startServer(
   port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
-  host = process.env.HOST || '192.168.5.142'
+  host = process.env.HOST || '0.0.0.0'
 ) {
   return new Promise((resolve) => {
     const server = app.listen(port, host, () => {

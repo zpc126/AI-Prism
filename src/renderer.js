@@ -150,7 +150,9 @@ function hasAnalysisInput() {
 
 function updateStartButton() {
   const btnStart = $('#btn-start');
-  if (btnStart) btnStart.disabled = state.activeTab !== 'report' && !hasAnalysisInput();
+  if (btnStart) {
+    btnStart.disabled = !['report', 'scripts'].includes(state.activeTab) && !hasAnalysisInput();
+  }
 }
 
 function deriveRootTitle(requirement = state.requirement) {
@@ -329,6 +331,11 @@ function initViewInput() {
       placeholder: '这里会显示自动化执行产生的历史测试报告',
       desc: '查看自动化执行结果、步骤和截图',
       btnText: '查看报告'
+    },
+    scripts: {
+      placeholder: '脚本首次成功执行后会自动进入脚本库',
+      desc: '查看、编辑并直接执行已沉淀的自动化脚本',
+      btnText: '打开脚本库'
     }
   };
   
@@ -533,7 +540,7 @@ function initViewInput() {
   });
 
   btnStart.addEventListener('click', async () => {
-    if (state.activeTab === 'report') {
+    if (['report', 'scripts'].includes(state.activeTab)) {
       startAnalysis();
       return;
     }
@@ -556,7 +563,7 @@ function initViewInput() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      if (state.activeTab === 'report') {
+      if (['report', 'scripts'].includes(state.activeTab)) {
         startAnalysis();
         return;
       }
@@ -1700,6 +1707,10 @@ async function startAnalysis() {
     }
     if (state.activeTab === 'report') {
       await startTestReport();
+      return;
+    }
+    if (state.activeTab === 'scripts') {
+      await openScriptLibrary();
       return;
     }
   
@@ -3159,6 +3170,284 @@ function openExecutionReport(reportId) {
   modal.onclick = event => {
     if (event.target === modal) modal.remove();
   };
+}
+
+// ========== 自动化脚本库 ==========
+let scriptLibraryState = { scripts: [], selectedId: null };
+
+async function openScriptLibrary() {
+  state.isAnalyzing = false;
+  document.querySelector('.script-library-modal')?.remove();
+
+  const modal = document.createElement('div');
+  modal.className = 'script-library-modal fixed inset-0 z-[240] bg-white flex flex-col';
+  modal.innerHTML = `
+    <header class="h-16 px-6 border-b border-zinc-200 flex items-center justify-between">
+      <div>
+        <h2 class="text-lg font-semibold text-zinc-900">自动化脚本库</h2>
+        <p class="text-xs text-zinc-400 mt-0.5">成功执行后自动入库，下次优先直接回放，失败时再由 Agent 自愈</p>
+      </div>
+      <button class="close-script-library text-zinc-400 hover:text-zinc-800 text-2xl">×</button>
+    </header>
+    <div class="flex flex-1 min-h-0">
+      <aside class="w-80 border-r border-zinc-200 flex flex-col bg-zinc-50/70">
+        <div class="p-4 border-b border-zinc-200">
+          <input class="script-search w-full px-3 py-2 text-sm bg-white border border-zinc-200 rounded-lg outline-none focus:border-zinc-400" placeholder="搜索脚本或模块">
+        </div>
+        <div class="script-list flex-1 overflow-y-auto p-3 space-y-2"></div>
+      </aside>
+      <main class="script-editor flex-1 overflow-y-auto"></main>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector('.close-script-library').onclick = () => modal.remove();
+  modal.querySelector('.script-search').addEventListener('input', event => {
+    renderScriptList(event.target.value.trim());
+  });
+
+  try {
+    const response = await fetch(`${API_BASE}/scripts`);
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '加载脚本失败');
+    scriptLibraryState.scripts = data.scripts || [];
+    scriptLibraryState.selectedId = scriptLibraryState.scripts[0]?.id || null;
+    renderScriptList();
+    renderScriptEditor();
+  } catch (error) {
+    modal.querySelector('.script-list').innerHTML =
+      `<div class="p-4 text-sm text-red-500">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderScriptList(keyword = '') {
+  const container = document.querySelector('.script-library-modal .script-list');
+  if (!container) return;
+  const lowerKeyword = keyword.toLowerCase();
+  const scripts = scriptLibraryState.scripts.filter(script => {
+    const text = `${script.name} ${script.module_name} ${script.product_name}`.toLowerCase();
+    return !lowerKeyword || text.includes(lowerKeyword);
+  });
+
+  container.innerHTML = scripts.length ? scripts.map(script => {
+    const selected = script.id === scriptLibraryState.selectedId;
+    const successRate = script.run_count
+      ? Math.round((script.success_count / script.run_count) * 100)
+      : null;
+    return `
+      <button class="script-list-item w-full text-left p-3 rounded-xl border transition-colors ${
+        selected ? 'bg-white border-zinc-400 shadow-sm' : 'bg-white/60 border-zinc-200 hover:border-zinc-300'
+      }" data-script-id="${escapeHtml(script.id)}">
+        <div class="flex items-start justify-between gap-2">
+          <div class="text-sm font-medium text-zinc-800 line-clamp-2">${escapeHtml(script.name)}</div>
+          <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded ${
+            script.enabled ? 'bg-emerald-50 text-emerald-600' : 'bg-zinc-100 text-zinc-400'
+          }">${script.enabled ? '启用' : '停用'}</span>
+        </div>
+        <div class="text-xs text-zinc-400 mt-2">${escapeHtml(script.product_name || '未分类')} / ${escapeHtml(script.module_name || '未分类')}</div>
+        <div class="flex gap-3 text-[11px] text-zinc-400 mt-2">
+          <span>${script.steps.length} 个动作</span>
+          <span>执行 ${script.run_count} 次</span>
+          ${successRate === null ? '' : `<span>成功率 ${successRate}%</span>`}
+        </div>
+      </button>`;
+  }).join('') : '<div class="text-sm text-zinc-400 text-center py-12">暂无脚本<br><span class="text-xs">成功执行用例后会自动入库</span></div>';
+
+  container.querySelectorAll('.script-list-item').forEach(button => {
+    button.onclick = () => {
+      scriptLibraryState.selectedId = button.dataset.scriptId;
+      renderScriptList(keyword);
+      renderScriptEditor();
+    };
+  });
+}
+
+function renderScriptEditor() {
+  const container = document.querySelector('.script-library-modal .script-editor');
+  if (!container) return;
+  const script = scriptLibraryState.scripts.find(item => item.id === scriptLibraryState.selectedId);
+  if (!script) {
+    container.innerHTML = '<div class="h-full flex items-center justify-center text-sm text-zinc-400">选择一个脚本查看和编辑</div>';
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="max-w-4xl mx-auto p-8">
+      <div class="flex items-start justify-between gap-6 mb-8">
+        <div class="flex-1">
+          <label class="text-xs text-zinc-400">脚本名称</label>
+          <input id="script-name" class="mt-1 w-full text-xl font-semibold text-zinc-900 border-0 border-b border-zinc-200 py-2 outline-none focus:border-zinc-500" value="${escapeHtml(script.name)}">
+          <div class="grid grid-cols-2 gap-4 mt-5">
+            <label class="text-xs text-zinc-400">一级产品
+              <input id="script-product" class="block mt-1 w-full px-3 py-2 text-sm text-zinc-700 border border-zinc-200 rounded-lg outline-none focus:border-zinc-400" value="${escapeHtml(script.product_name || '')}">
+            </label>
+            <label class="text-xs text-zinc-400">业务模块
+              <input id="script-module" class="block mt-1 w-full px-3 py-2 text-sm text-zinc-700 border border-zinc-200 rounded-lg outline-none focus:border-zinc-400" value="${escapeHtml(script.module_name || '')}">
+            </label>
+          </div>
+        </div>
+        <div class="flex gap-2 pt-5">
+          <button class="delete-script px-3 py-2 text-sm text-red-500 hover:bg-red-50 rounded-lg">删除</button>
+          <button class="save-script px-4 py-2 text-sm text-zinc-700 border border-zinc-300 hover:bg-zinc-50 rounded-lg">保存</button>
+          <button class="run-script px-4 py-2 text-sm text-white bg-zinc-900 hover:bg-zinc-800 rounded-lg">执行测试</button>
+        </div>
+      </div>
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <h3 class="text-sm font-semibold text-zinc-800">执行动作</h3>
+          <p class="text-xs text-zinc-400 mt-1">按顺序直接回放，不消耗大模型 Token</p>
+        </div>
+        <button class="add-script-step text-xs px-3 py-1.5 border border-zinc-200 hover:bg-zinc-50 rounded-lg">添加动作</button>
+      </div>
+      <div class="script-step-list space-y-2">${script.steps.map((step, index) => renderScriptStep(step, index)).join('')}</div>
+      <label class="block mt-7 text-xs text-zinc-400">预期结果
+        <textarea id="script-expected" rows="3" class="block mt-1 w-full px-3 py-2 text-sm text-zinc-700 border border-zinc-200 rounded-lg outline-none focus:border-zinc-400">${escapeHtml(script.expected || '')}</textarea>
+      </label>
+      <label class="mt-5 inline-flex items-center gap-2 text-sm text-zinc-600">
+        <input id="script-enabled" type="checkbox" ${script.enabled ? 'checked' : ''}>
+        自动执行时优先使用这个脚本
+      </label>
+      <div class="mt-8 pt-5 border-t border-zinc-100 text-xs text-zinc-400 flex gap-6">
+        <span>执行次数：${script.run_count}</span>
+        <span>成功次数：${script.success_count}</span>
+        <span>最近状态：${escapeHtml(script.last_status || '未执行')}</span>
+      </div>
+    </div>`;
+  bindScriptEditorEvents(script);
+}
+
+function renderScriptStep(step, index) {
+  const actions = [
+    ['navigate', '打开页面'],
+    ['click', '点击'],
+    ['fill', '输入'],
+    ['wait', '等待元素'],
+    ['scroll', '滚动'],
+    ['assert_text', '验证页面文本'],
+  ];
+  return `
+    <div class="script-step-row grid grid-cols-[36px_130px_1fr_1fr_36px] gap-2 items-center p-2 border border-zinc-200 rounded-xl bg-white">
+      <span class="text-xs text-zinc-400 text-center">${index + 1}</span>
+      <select class="step-action px-2 py-2 text-sm border border-zinc-200 rounded-lg bg-white">
+        ${actions.map(([value, label]) => `<option value="${value}" ${step.action === value ? 'selected' : ''}>${label}</option>`).join('')}
+      </select>
+      <input class="step-target px-3 py-2 text-sm border border-zinc-200 rounded-lg" placeholder="URL、按钮或输入框名称" value="${escapeHtml(step.target || '')}">
+      <input class="step-value px-3 py-2 text-sm border border-zinc-200 rounded-lg" placeholder="输入值或滚动距离" value="${escapeHtml(step.value || '')}">
+      <button class="remove-script-step text-zinc-300 hover:text-red-500 text-xl">×</button>
+    </div>`;
+}
+
+function bindScriptEditorEvents(script) {
+  const editor = document.querySelector('.script-library-modal .script-editor');
+  editor.querySelector('.add-script-step').onclick = () => {
+    script.steps.push({ action: 'click', target: '', value: '' });
+    renderScriptEditor();
+  };
+  editor.querySelectorAll('.remove-script-step').forEach((button, index) => {
+    button.onclick = () => {
+      script.steps.splice(index, 1);
+      renderScriptEditor();
+    };
+  });
+  editor.querySelector('.save-script').onclick = () => saveCurrentScript(script);
+  editor.querySelector('.run-script').onclick = async () => {
+    const saved = await saveCurrentScript(script);
+    await executeLibraryScript(saved.id);
+  };
+  editor.querySelector('.delete-script').onclick = async () => {
+    if (!window.confirm(`确定删除脚本“${script.name}”吗？`)) return;
+    await fetch(`${API_BASE}/scripts/${encodeURIComponent(script.id)}`, { method: 'DELETE' });
+    scriptLibraryState.scripts = scriptLibraryState.scripts.filter(item => item.id !== script.id);
+    scriptLibraryState.selectedId = scriptLibraryState.scripts[0]?.id || null;
+    renderScriptList();
+    renderScriptEditor();
+  };
+}
+
+function collectScriptSteps() {
+  return [...document.querySelectorAll('.script-library-modal .script-step-row')].map(row => ({
+    action: row.querySelector('.step-action').value,
+    target: row.querySelector('.step-target').value.trim(),
+    value: row.querySelector('.step-value').value,
+  })).filter(step => step.target || step.action === 'scroll');
+}
+
+async function saveCurrentScript(script) {
+  const editor = document.querySelector('.script-library-modal .script-editor');
+  const payload = {
+    name: editor.querySelector('#script-name').value.trim(),
+    productName: editor.querySelector('#script-product').value.trim(),
+    moduleName: editor.querySelector('#script-module').value.trim(),
+    expected: editor.querySelector('#script-expected').value.trim(),
+    enabled: editor.querySelector('#script-enabled').checked,
+    steps: collectScriptSteps(),
+  };
+  const response = await fetch(`${API_BASE}/scripts/${encodeURIComponent(script.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.success) throw new Error(data.error || '保存失败');
+  const index = scriptLibraryState.scripts.findIndex(item => item.id === script.id);
+  scriptLibraryState.scripts[index] = data.script;
+  renderScriptList();
+  renderScriptEditor();
+  return data.script;
+}
+
+async function executeLibraryScript(scriptId) {
+  showIsland();
+  toggleIslandExpanded(true);
+  islandState.isRunning = true;
+  islandState.total = 1;
+  updateIslandProgress(0, 1);
+  updateIslandStatus('脚本执行中', '直接回放脚本，不调用大模型');
+  addIslandLog('system', '已从脚本库启动执行');
+
+  try {
+    const response = await fetch(`${API_BASE}/scripts/${encodeURIComponent(scriptId)}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (line.startsWith('event: ')) currentEvent = line.slice(7).trim();
+        if (!line.startsWith('data: ')) continue;
+        const payload = JSON.parse(line.slice(6));
+        if (currentEvent === 'log' && payload.text) {
+          addIslandLog(payload.type || 'info', payload.text);
+        } else if (currentEvent === 'complete') {
+          islandState.isRunning = false;
+          islandState.lastReportId = payload.reportId || null;
+          updateIslandProgress(1, 1);
+          updateIslandStatus(payload.failed ? '脚本执行失败' : '脚本执行完成', `${payload.passed || 0} 通过, ${payload.failed || 0} 失败`);
+          if (payload.reportId) $('#btn-exec-view-report')?.classList.remove('hidden');
+          const refreshed = await fetch(`${API_BASE}/scripts`).then(result => result.json());
+          if (refreshed.success) {
+            scriptLibraryState.scripts = refreshed.scripts || [];
+            renderScriptList();
+            renderScriptEditor();
+          }
+        } else if (currentEvent === 'error') {
+          throw new Error(payload.error || '脚本执行失败');
+        }
+      }
+    }
+  } catch (error) {
+    islandState.isRunning = false;
+    updateIslandStatus('脚本执行失败', error.message);
+    addIslandLog('error', error.message);
+  }
 }
 
 function showReportResult(report) {
