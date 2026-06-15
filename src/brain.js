@@ -712,9 +712,9 @@ function showFragmentDetail(fragmentId) {
   const circle = nodeEl.querySelector('circle:nth-child(2)');
   const circleRect = circle.getBoundingClientRect();
 
-  // 使用变换后的实际位置，确保缩放和平移后卡片仍贴着节点。
-  const pageX = circleRect.left + circleRect.width / 2;
-  const pageY = circleRect.top + circleRect.height / 2;
+  // 使用变换后的实际位置，并限制在视口内，避免卡片上下被截断。
+  const pageX = Math.max(190, Math.min(window.innerWidth - 190, circleRect.left + circleRect.width / 2));
+  const pageY = Math.max(260, Math.min(window.innerHeight - 260, circleRect.top + circleRect.height / 2));
   
   // 创建 Flipbook 卡片
   const card = document.createElement('div');
@@ -730,39 +730,46 @@ function showFragmentDetail(fragmentId) {
   // 获取节点颜色
   const nodeColor = circle.getAttribute('fill') || '#6366f1';
   
+  const tags = Array.isArray(fragment.tags) ? fragment.tags : [];
+
   card.innerHTML = `
-    <div class="flipbook-inner" style="background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.15); width: 320px; overflow: hidden;">
+    <div class="flipbook-inner" style="background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.15); width: 340px; max-height: min(520px, calc(100vh - 48px)); overflow: hidden; display: flex; flex-direction: column;">
       <!-- 头部 -->
-      <div style="background: ${nodeColor}; padding: 20px; position: relative;">
+      <div style="background: ${nodeColor}; padding: 20px; position: relative; flex-shrink: 0;">
         <div style="position: absolute; top: 12px; right: 12px;">
           <button class="flipbook-close" style="background: rgba(255,255,255,0.2); border: none; border-radius: 8px; padding: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
           </button>
         </div>
-        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;">
-          ${fragment.tags.map(tag => `
-            <span style="background: rgba(255,255,255,0.2); color: white; padding: 3px 10px; border-radius: 20px; font-size: 11px;">${tag}</span>
-          `).join('')}
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; padding-right: 34px; max-height: 58px; overflow-y: auto;">
+          ${tags.map(tag => `
+            <span style="background: rgba(255,255,255,0.2); color: white; padding: 3px 10px; border-radius: 20px; font-size: 11px; flex-shrink: 0;">${escapeHtml(tag)}</span>
+          `).join('') || '<span style="color: rgba(255,255,255,0.75); font-size: 11px;">暂无标签</span>'}
         </div>
-        <p style="color: white; font-size: 15px; line-height: 1.6; margin: 0; font-weight: 500;">${escapeHtml(fragment.content)}</p>
+        <div style="border-top: 1px solid rgba(255,255,255,0.24); padding-top: 12px;">
+          <div style="font-size: 11px; color: rgba(255,255,255,0.72); margin-bottom: 8px;">内容</div>
+          <div style="max-height: 190px; overflow-y: auto; padding: 10px 8px 10px 10px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.14); border-radius: 12px;">
+            <p style="color: white; font-size: 15px; line-height: 1.6; margin: 0; font-weight: 500; white-space: pre-wrap; word-break: break-word;">${escapeHtml(fragment.content)}</p>
+          </div>
+        </div>
       </div>
       
       <!-- 详情 -->
-      <div style="padding: 16px 20px;">
-        <div style="display: flex; gap: 16px; margin-bottom: 16px;">
+      <div style="padding: 12px 18px; overflow-y: auto; flex: 1; min-height: 0;">
+        <div style="display: flex; gap: 12px; margin-bottom: 12px;">
           <div style="flex: 1; background: #f9f9f9; border-radius: 10px; padding: 12px; text-align: center;">
             <div style="font-size: 20px; font-weight: 600; color: #333;">${fragment.usage_count || 0}</div>
             <div style="font-size: 11px; color: #999; margin-top: 4px;">使用次数</div>
           </div>
           <div style="flex: 1; background: #f9f9f9; border-radius: 10px; padding: 12px; text-align: center;">
-            <div style="font-size: 20px; font-weight: 600; color: #333;">${fragment.tags.length}</div>
+            <div style="font-size: 20px; font-weight: 600; color: #333;">${tags.length}</div>
             <div style="font-size: 11px; color: #999; margin-top: 4px;">标签数</div>
           </div>
         </div>
         
-        <div style="background: #f9f9f9; border-radius: 10px; padding: 12px; margin-bottom: 16px;">
+        <div style="background: #f9f9f9; border-radius: 10px; padding: 10px; margin-bottom: 12px;">
           <div style="font-size: 11px; color: #999; margin-bottom: 4px;">来源</div>
-          <div style="font-size: 13px; color: #666;">${fragment.source || '手动输入'}</div>
+          <div style="font-size: 13px; color: #666; word-break: break-word;">${escapeHtml(fragment.source || '手动输入')}</div>
         </div>
         
         <div style="display: flex; gap: 8px;">

@@ -19,6 +19,9 @@ const state = {
   chatHistories: JSON.parse(localStorage.getItem('prism_chat_histories') || '{}'),
   uploadedFiles: [], // 上传的文件
   rootTitle: '',
+  projectName: '',
+  requirementName: '',
+  requirementVersion: 'V1.0',
   activeTab: 'cases' // 当前激活的 Tab
 };
 
@@ -74,6 +77,10 @@ async function persistCurrentSession() {
   );
   const payload = {
     requirement: state.requirement || getMindMapRootTitle(),
+    title: state.requirementName || state.rootTitle || getMindMapRootTitle(),
+    projectName: state.projectName || '',
+    requirementName: state.requirementName || state.rootTitle || getMindMapRootTitle(),
+    requirementVersion: state.requirementVersion || 'V1.0',
     categories: state.categories,
     mindMap: state.mindMap,
     caseCount
@@ -3813,28 +3820,47 @@ function showSessionHistoryModal(sessions) {
     // SQLite 存的是 UTC，加 Z 表示 UTC 再转本地时间
     const date = new Date(s.createdAt.replace(' ', 'T') + 'Z');
     const timeStr = `${date.getMonth()+1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2,'0')}`;
-    const reqPreview = s.requirement ? s.requirement.substring(0, 60) + (s.requirement.length > 60 ? '...' : '') : '未知需求';
+    const reqPreview = s.requirement ? s.requirement.substring(0, 90) + (s.requirement.length > 90 ? '...' : '') : '未知需求';
+    const projectName = s.projectName || '未设置项目';
+    const requirementName = s.requirementName || s.title || '未命名需求';
+    const version = s.requirementVersion || 'V1.0';
+    const status = s.status || 'completed';
+    const searchText = [projectName, requirementName, version, status, s.requirement || ''].join(' ');
     
     return `
-      <div class="session-item p-4 border border-zinc-100 rounded-lg hover:bg-zinc-50 cursor-pointer transition-colors" data-session-id="${s.id}" data-requirement="${escapeHtml(s.requirement || '')}">
-        <div class="flex justify-between items-start">
-          <div class="flex-1">
-            <p class="text-sm text-zinc-700 mb-1">${escapeHtml(reqPreview)}</p>
+      <div class="session-item p-4 border border-zinc-200 rounded-xl hover:bg-zinc-50 cursor-pointer transition-colors" data-session-id="${s.id}" data-requirement="${escapeHtml(searchText)}">
+        <div class="flex justify-between gap-3 items-start">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-2 flex-wrap">
+              <span class="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">${escapeHtml(projectName)}</span>
+              <span class="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">${escapeHtml(version)}</span>
+              <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">${escapeHtml(status)}</span>
+            </div>
+            <h4 class="text-sm font-medium text-zinc-900 mb-1">${escapeHtml(requirementName)}</h4>
+            <p class="text-xs text-zinc-500 leading-relaxed mb-2">${escapeHtml(reqPreview)}</p>
             <p class="text-xs text-zinc-400">${s.caseCount || 0} 条用例 · ${timeStr}</p>
           </div>
-          <button class="delete-session p-1 text-zinc-300 hover:text-red-500 transition-colors" data-id="${s.id}">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
+          <div class="flex items-center gap-1 shrink-0">
+            <button class="edit-session p-1.5 text-zinc-400 hover:text-zinc-700 transition-colors" data-id="${s.id}" title="编辑版本信息">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+            </button>
+            <button class="delete-session p-1.5 text-zinc-300 hover:text-red-500 transition-colors" data-id="${s.id}" title="删除">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
         </div>
       </div>
     `;
   }).join('');
   
   modal.innerHTML = `
-    <div class="bg-white rounded-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col" style="box-shadow: 0 4px 24px rgba(0,0,0,0.08)">
+    <div class="bg-white rounded-xl w-full max-w-3xl mx-4 max-h-[80vh] flex flex-col" style="box-shadow: 0 4px 24px rgba(0,0,0,0.08)">
       <div class="p-5 border-b border-zinc-100">
         <div class="flex justify-between items-center mb-3">
-          <h3 class="text-base font-medium text-zinc-800">用例库</h3>
+          <div>
+            <h3 class="text-base font-medium text-zinc-800">用例库</h3>
+            <p class="text-xs text-zinc-400 mt-1">按项目、需求和版本管理生成记录</p>
+          </div>
           <button id="close-history" class="text-zinc-400 hover:text-zinc-600">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
@@ -3874,13 +3900,22 @@ function showSessionHistoryModal(sessions) {
   // 点击会话项加载
   modal.querySelectorAll('.session-item').forEach(item => {
     item.addEventListener('click', (e) => {
-      if (e.target.closest('.delete-session')) return;
+      if (e.target.closest('.delete-session') || e.target.closest('.edit-session')) return;
       const sessionId = item.dataset.sessionId;
       const session = sessions.find(s => s.id === sessionId);
       if (session) {
         modal.remove();
         loadSession(session);
       }
+    });
+  });
+  
+  // 编辑版本信息
+  modal.querySelectorAll('.edit-session').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const session = sessions.find(s => s.id === btn.dataset.id);
+      if (session) showEditSessionModal(session, modal);
     });
   });
   
@@ -3899,12 +3934,92 @@ function showSessionHistoryModal(sessions) {
   });
 }
 
+function showEditSessionModal(session, historyModal) {
+  const existing = document.getElementById('edit-session-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'edit-session-modal';
+  modal.className = 'fixed inset-0 z-[60] flex items-center justify-center';
+  modal.style.background = 'rgba(0,0,0,0.24)';
+  modal.innerHTML = `
+    <div class="bg-white rounded-xl w-full max-w-md mx-4" style="box-shadow: 0 4px 24px rgba(0,0,0,0.08)">
+      <div class="p-5 border-b border-zinc-100 flex items-center justify-between">
+        <h3 class="text-base font-medium text-zinc-900">编辑需求版本</h3>
+        <button id="close-edit-session" class="text-zinc-400 hover:text-zinc-600">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="p-5 space-y-4">
+        <label class="block">
+          <span class="text-xs text-zinc-500">项目名称</span>
+          <input id="edit-project-name" class="mt-1 w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:border-zinc-400" value="${escapeHtml(session.projectName || '')}" placeholder="例如：供应链系统">
+        </label>
+        <label class="block">
+          <span class="text-xs text-zinc-500">需求名称</span>
+          <input id="edit-requirement-name" class="mt-1 w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:border-zinc-400" value="${escapeHtml(session.requirementName || session.title || '')}" placeholder="例如：登录功能测试">
+        </label>
+        <label class="block">
+          <span class="text-xs text-zinc-500">版本号</span>
+          <input id="edit-requirement-version" class="mt-1 w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:border-zinc-400" value="${escapeHtml(session.requirementVersion || 'V1.0')}" placeholder="例如：V1.0">
+        </label>
+        <label class="block">
+          <span class="text-xs text-zinc-500">状态</span>
+          <select id="edit-session-status" class="mt-1 w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:border-zinc-400">
+            ${['completed', 'draft', 'reviewing', 'archived'].map(status => `<option value="${status}" ${status === (session.status || 'completed') ? 'selected' : ''}>${status}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+      <div class="p-5 border-t border-zinc-100 flex justify-end gap-2">
+        <button id="cancel-edit-session" class="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-700">取消</button>
+        <button id="save-edit-session" class="px-4 py-2 text-sm bg-zinc-900 text-white rounded-lg hover:bg-zinc-800">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  document.getElementById('close-edit-session').addEventListener('click', close);
+  document.getElementById('cancel-edit-session').addEventListener('click', close);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) close();
+  });
+
+  document.getElementById('save-edit-session').addEventListener('click', async () => {
+    const updates = {
+      title: document.getElementById('edit-requirement-name').value.trim() || session.title,
+      projectName: document.getElementById('edit-project-name').value.trim(),
+      requirementName: document.getElementById('edit-requirement-name').value.trim(),
+      requirementVersion: document.getElementById('edit-requirement-version').value.trim() || 'V1.0',
+      status: document.getElementById('edit-session-status').value
+    };
+    try {
+      const response = await fetch(`${API_BASE}/sessions/${session.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '保存失败');
+      close();
+      historyModal.remove();
+      loadSessionHistory();
+    } catch (error) {
+      console.error('编辑会话失败:', error);
+      alert(error.message || '保存失败');
+    }
+  });
+}
+
 // ========== 加载单个会话 ==========
 function loadSession(session) {
   if (session.categories) {
     state.requirement = session.requirement;
     state.categories = session.categories;
     state.rootTitle = session.mindMap?.title || deriveRootTitle(session.requirement);
+    state.projectName = session.projectName || '';
+    state.requirementName = session.requirementName || session.title || state.rootTitle;
+    state.requirementVersion = session.requirementVersion || 'V1.0';
     state.currentSessionId = session.id;
     
     switchView('engine');

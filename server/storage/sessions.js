@@ -31,6 +31,9 @@ function initTables() {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       requirement TEXT NOT NULL,
+      project_name TEXT DEFAULT '',
+      requirement_name TEXT DEFAULT '',
+      requirement_version TEXT DEFAULT 'V1.0',
       categories TEXT DEFAULT '[]',
       mind_map TEXT,
       status TEXT DEFAULT 'completed',
@@ -42,6 +45,16 @@ function initTables() {
     CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
   `);
+
+  const columns = db.prepare('PRAGMA table_info(sessions)').all().map(column => column.name);
+  const migrations = [
+    ['project_name', "ALTER TABLE sessions ADD COLUMN project_name TEXT DEFAULT ''"],
+    ['requirement_name', "ALTER TABLE sessions ADD COLUMN requirement_name TEXT DEFAULT ''"],
+    ['requirement_version', "ALTER TABLE sessions ADD COLUMN requirement_version TEXT DEFAULT 'V1.0'"]
+  ];
+  migrations.forEach(([name, sql]) => {
+    if (!columns.includes(name)) db.exec(sql);
+  });
 }
 
 /**
@@ -49,17 +62,30 @@ function initTables() {
  */
 function createSession(data) {
   const db = getDb();
-  const { id, title, requirement, categories, mindMap, caseCount } = data;
+  const {
+    id,
+    title,
+    requirement,
+    projectName,
+    requirementName,
+    requirementVersion,
+    categories,
+    mindMap,
+    caseCount
+  } = data;
   
   const stmt = db.prepare(`
-    INSERT INTO sessions (id, title, requirement, categories, mind_map, case_count, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    INSERT INTO sessions (id, title, requirement, project_name, requirement_name, requirement_version, categories, mind_map, case_count, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
   `);
   
   stmt.run(
     id,
     title || generateTitle(requirement),
     requirement,
+    projectName || '',
+    requirementName || title || generateTitle(requirement),
+    requirementVersion || 'V1.0',
     JSON.stringify(categories || []),
     mindMap ? JSON.stringify(mindMap) : null,
     caseCount || 0
@@ -80,6 +106,9 @@ function getSessionById(id) {
     id: row.id,
     title: row.title,
     requirement: row.requirement,
+    projectName: row.project_name || '',
+    requirementName: row.requirement_name || row.title,
+    requirementVersion: row.requirement_version || 'V1.0',
     categories: JSON.parse(row.categories || '[]'),
     mindMap: row.mind_map ? JSON.parse(row.mind_map) : null,
     status: row.status,
@@ -106,6 +135,9 @@ function getAllSessions(options = {}) {
     id: row.id,
     title: row.title,
     requirement: row.requirement,
+    projectName: row.project_name || '',
+    requirementName: row.requirement_name || row.title,
+    requirementVersion: row.requirement_version || 'V1.0',
     categories: JSON.parse(row.categories || '[]'),
     mindMap: row.mind_map ? JSON.parse(row.mind_map) : null,
     status: row.status,
@@ -126,6 +158,18 @@ function updateSession(id, updates) {
   if (updates.title !== undefined) {
     sets.push('title = ?');
     params.push(updates.title);
+  }
+  if (updates.projectName !== undefined) {
+    sets.push('project_name = ?');
+    params.push(updates.projectName);
+  }
+  if (updates.requirementName !== undefined) {
+    sets.push('requirement_name = ?');
+    params.push(updates.requirementName);
+  }
+  if (updates.requirementVersion !== undefined) {
+    sets.push('requirement_version = ?');
+    params.push(updates.requirementVersion);
   }
   if (updates.categories !== undefined) {
     sets.push('categories = ?');
