@@ -53,6 +53,21 @@ router.get('/', (req, res) => {
 });
 
 /**
+ * 单独保存对话，不触发历史用例知识重新学习
+ */
+router.put('/:id/chat-history', (req, res) => {
+  try {
+    const { id } = req.params;
+    const chatHistory = Array.isArray(req.body.chatHistory) ? req.body.chatHistory : [];
+    const session = updateSession(id, { chatHistory });
+    if (!session) return res.status(404).json({ error: '会话不存在' });
+    res.json({ success: true, chatHistory: session.chatHistory });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * 获取单个会话
  */
 router.get('/:id', (req, res) => {

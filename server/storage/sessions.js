@@ -34,6 +34,7 @@ function initTables() {
       project_name TEXT DEFAULT '',
       requirement_name TEXT DEFAULT '',
       requirement_version TEXT DEFAULT 'V1.0',
+      chat_history TEXT DEFAULT '[]',
       categories TEXT DEFAULT '[]',
       mind_map TEXT,
       status TEXT DEFAULT 'completed',
@@ -50,7 +51,8 @@ function initTables() {
   const migrations = [
     ['project_name', "ALTER TABLE sessions ADD COLUMN project_name TEXT DEFAULT ''"],
     ['requirement_name', "ALTER TABLE sessions ADD COLUMN requirement_name TEXT DEFAULT ''"],
-    ['requirement_version', "ALTER TABLE sessions ADD COLUMN requirement_version TEXT DEFAULT 'V1.0'"]
+    ['requirement_version', "ALTER TABLE sessions ADD COLUMN requirement_version TEXT DEFAULT 'V1.0'"],
+    ['chat_history', "ALTER TABLE sessions ADD COLUMN chat_history TEXT DEFAULT '[]'"]
   ];
   migrations.forEach(([name, sql]) => {
     if (!columns.includes(name)) db.exec(sql);
@@ -69,14 +71,15 @@ function createSession(data) {
     projectName,
     requirementName,
     requirementVersion,
+    chatHistory,
     categories,
     mindMap,
     caseCount
   } = data;
   
   const stmt = db.prepare(`
-    INSERT INTO sessions (id, title, requirement, project_name, requirement_name, requirement_version, categories, mind_map, case_count, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    INSERT INTO sessions (id, title, requirement, project_name, requirement_name, requirement_version, chat_history, categories, mind_map, case_count, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
   `);
   
   stmt.run(
@@ -86,6 +89,7 @@ function createSession(data) {
     projectName || '',
     requirementName || title || generateTitle(requirement),
     requirementVersion || 'V1.0',
+    JSON.stringify(chatHistory || []),
     JSON.stringify(categories || []),
     mindMap ? JSON.stringify(mindMap) : null,
     caseCount || 0
@@ -109,6 +113,7 @@ function getSessionById(id) {
     projectName: row.project_name || '',
     requirementName: row.requirement_name || row.title,
     requirementVersion: row.requirement_version || 'V1.0',
+    chatHistory: JSON.parse(row.chat_history || '[]'),
     categories: JSON.parse(row.categories || '[]'),
     mindMap: row.mind_map ? JSON.parse(row.mind_map) : null,
     status: row.status,
@@ -138,6 +143,7 @@ function getAllSessions(options = {}) {
     projectName: row.project_name || '',
     requirementName: row.requirement_name || row.title,
     requirementVersion: row.requirement_version || 'V1.0',
+    chatHistory: JSON.parse(row.chat_history || '[]'),
     categories: JSON.parse(row.categories || '[]'),
     mindMap: row.mind_map ? JSON.parse(row.mind_map) : null,
     status: row.status,
@@ -170,6 +176,10 @@ function updateSession(id, updates) {
   if (updates.requirementVersion !== undefined) {
     sets.push('requirement_version = ?');
     params.push(updates.requirementVersion);
+  }
+  if (updates.chatHistory !== undefined) {
+    sets.push('chat_history = ?');
+    params.push(JSON.stringify(updates.chatHistory));
   }
   if (updates.categories !== undefined) {
     sets.push('categories = ?');

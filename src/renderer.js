@@ -16,7 +16,7 @@ const state = {
   isThinking: false,
   currentSessionId: null,
   selectedCategory: null,
-  chatHistories: JSON.parse(localStorage.getItem('prism_chat_histories') || '{}'),
+  chatHistory: [],
   uploadedFiles: [], // 上传的文件
   rootTitle: '',
   projectName: '',
@@ -55,19 +55,59 @@ window.removeFile = function(fileId) {
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-function getChatContextKey() {
-  return `${state.currentSessionId || state.rootTitle || 'current'}::${state.selectedCategory || '全部'}`;
+function getChatHistory() {
+  return state.chatHistory.slice(-30);
 }
 
-function getChatHistory() {
-  return state.chatHistories[getChatContextKey()] || [];
+function loadLegacyChatHistory(sessionId) {
+  try {
+    const stored = JSON.parse(localStorage.getItem('prism_chat_histories') || '{}');
+    return Object.entries(stored)
+      .filter(([key, messages]) => key.startsWith(`${sessionId}::`) && Array.isArray(messages))
+      .flatMap(([key, messages]) => {
+        const category = key.split('::').slice(1).join('::');
+        return messages.map(message => ({
+          role: message.role,
+          content: message.content,
+          category: category === '全部' ? '' : category,
+          createdAt: message.createdAt || Date.now()
+        }));
+      })
+      .sort((left, right) => left.createdAt - right.createdAt);
+  } catch (error) {
+    console.warn('旧对话记录迁移失败:', error.message);
+    return [];
+  }
 }
 
 function saveChatMessage(role, content) {
-  const key = getChatContextKey();
-  if (!state.chatHistories[key]) state.chatHistories[key] = [];
-  state.chatHistories[key].push({ role, content, createdAt: Date.now() });
-  localStorage.setItem('prism_chat_histories', JSON.stringify(state.chatHistories));
+  state.chatHistory.push({
+    role,
+    content,
+    category: state.selectedCategory || '',
+    createdAt: Date.now()
+  });
+  if (state.chatHistory.length > 200) {
+    state.chatHistory = state.chatHistory.slice(-200);
+  }
+  queueChatHistoryPersist();
+}
+
+function queueChatHistoryPersist() {
+  clearTimeout(queueChatHistoryPersist.timer);
+  if (!state.currentSessionId) return;
+  queueChatHistoryPersist.timer = setTimeout(async () => {
+    try {
+      await fetch(`${API_BASE}/sessions/${state.currentSessionId}/chat-history`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatHistory: state.chatHistory }),
+        keepalive: true
+      });
+    } catch (error) {
+      console.error('保存对话记录失败:', error);
+    }
+  }, 180);
 }
 
 async function persistCurrentSession() {
@@ -81,6 +121,7 @@ async function persistCurrentSession() {
     projectName: state.projectName || '',
     requirementName: state.requirementName || state.rootTitle || getMindMapRootTitle(),
     requirementVersion: state.requirementVersion || 'V1.0',
+    chatHistory: state.chatHistory,
     categories: state.categories,
     mindMap: state.mindMap,
     caseCount
@@ -621,7 +662,7 @@ function initViewEngine() {
 }
 
 // ========== 灵动岛状态更新 ==========
-function updateIslandStatus(status, text) {
+function updateChatIslandStatus(status, text) {
   const statusText = $('#island-status-text');
   const hintText = $('#island-hint-text');
   
@@ -699,13 +740,7 @@ async function sendIslandMessage() {
   
   // 显示思考状态
   const thinkingId = addIslandThinking();
-  addIslandMessage('system', '消息已收到，正在连接模型...');
-  const startedAt = Date.now();
-  const waitingTimer = setInterval(() => {
-    const seconds = Math.floor((Date.now() - startedAt) / 1000);
-    updateIslandStatus('analyzing', `模型思考中 · ${seconds} 秒`);
-  }, 1000);
-  updateIslandStatus('analyzing', '正在连接模型...');
+  const stopWaitingFeedback = startIslandThinkingFeedback(thinkingId);
   
   let newCasesAdded = 0;
   let casesUpdated = 0;
@@ -778,7 +813,7 @@ async function sendIslandMessage() {
               newCasesAdded++;
               
               // 更新状态
-              updateIslandStatus('analyzing', `已添加 ${newCasesAdded} 条用例...`);
+              updateChatIslandStatus('analyzing', `已添加 ${newCasesAdded} 条用例...`);
             } else if (currentEvent === 'reply' && payload.text) {
               scoutReply = payload.text;
               if (!replyShown) {
@@ -786,11 +821,12 @@ async function sendIslandMessage() {
                 saveChatMessage('assistant', scoutReply);
                 replyShown = true;
               }
+              stopWaitingFeedback();
               removeIslandThinking(thinkingId);
             } else if (currentEvent === 'update' && payload.case) {
               if (applyCaseUpdate(payload.case)) {
                 casesUpdated++;
-                updateIslandStatus('analyzing', `已修改 ${casesUpdated} 条用例...`);
+                updateChatIslandStatus('analyzing', `已修改 ${casesUpdated} 条用例...`);
               }
             }
           } catch (e) {}
@@ -818,15 +854,17 @@ async function sendIslandMessage() {
       saveChatMessage('assistant', scoutReply);
     }
     const totalCases = state.categories.reduce((sum, cat) => sum + (cat.cases?.length || 0), 0);
-    updateIslandStatus('ready', `${totalCases} 条用例就绪`);
+    updateChatIslandStatus('ready', `${totalCases} 条用例就绪`);
     
   } catch (err) {
     removeIslandThinking(thinkingId);
     const timedOut = err?.name === 'AbortError';
-    addIslandMessage('scout', timedOut ? '模型响应超时了，请再试一次' : '出了点问题，稍后再试试');
-    updateIslandStatus('error', timedOut ? '响应超时' : '请求失败');
+    const errorReply = timedOut ? '模型响应超时了，请再试一次' : '出了点问题，稍后再试试';
+    addIslandMessage('scout', errorReply);
+    saveChatMessage('assistant', errorReply);
+    updateChatIslandStatus('error', timedOut ? '响应超时' : '请求失败');
   } finally {
-    clearInterval(waitingTimer);
+    stopWaitingFeedback();
     clearTimeout(requestTimeout);
     if (sendButton) sendButton.disabled = false;
     input?.focus();
@@ -1720,6 +1758,10 @@ async function startAnalysis() {
       await openScriptWorkspace();
       return;
     }
+
+  state.currentSessionId = null;
+  state.chatHistory = [];
+  state.selectedCategory = null;
   
   switchView('engine');
   if (state.canvas) state.canvas.clear();
@@ -1917,7 +1959,7 @@ async function startAnalysis() {
       await scoutSay(coverage, 0);
       
       // 更新灵动岛状态并显示
-      updateIslandStatus('ready', `${totalCases} 条用例就绪`);
+      updateChatIslandStatus('ready', `${totalCases} 条用例就绪`);
       
       const island = $('#dynamic-island');
       if (island) {
@@ -1930,7 +1972,7 @@ async function startAnalysis() {
       }
       
       // 保存会话
-      saveSession(totalCases);
+      await saveSession(totalCases);
       
       // 显示画布对话条
       showCanvasChat();
@@ -2022,7 +2064,7 @@ function showCanvasChat() {
   }
   
   // 更新灵动岛状态提示
-  updateIslandStatus('ready', '可协作调整');
+  updateChatIslandStatus('ready', '可协作调整');
   
   const input = $('#island-input');
   const sendBtn = $('#btn-island-send');
@@ -2059,6 +2101,18 @@ function showCanvasChat() {
         </div>
       </div>
     `;
+
+    const history = getChatHistory();
+    if (history.length) {
+      const divider = document.createElement('div');
+      divider.className = 'island-history-divider';
+      divider.innerHTML = '<span>上次对话</span>';
+      chat.appendChild(divider);
+      history.forEach(item => {
+        const categoryPrefix = item.category && item.role === 'user' ? `[${item.category}] ` : '';
+        addIslandMessage(item.role === 'assistant' ? 'scout' : item.role, categoryPrefix + item.content);
+      });
+    }
     
     // 分类标签点击事件
     chat.querySelectorAll('.island-category-tag').forEach(tag => {
@@ -2097,6 +2151,8 @@ function showCanvasChat() {
       ? `[${state.selectedCategory}] ${msg}` 
       : msg;
     addIslandMessage('user', userMsg);
+    const previousHistory = getChatHistory().slice();
+    saveChatMessage('user', msg);
     
     // 收集当前用例
     const allCases = [];
@@ -2108,13 +2164,7 @@ function showCanvasChat() {
     
     // 显示思考状态
     const thinkingId = addIslandThinking();
-    addIslandMessage('system', '消息已收到，正在连接模型...');
-    const startedAt = Date.now();
-    const waitingTimer = setInterval(() => {
-      const seconds = Math.floor((Date.now() - startedAt) / 1000);
-      updateIslandStatus('analyzing', `模型思考中 · ${seconds} 秒`);
-    }, 1000);
-    updateIslandStatus('analyzing', '正在连接模型...');
+    const stopWaitingFeedback = startIslandThinkingFeedback(thinkingId);
     
     let newCasesAdded = 0;
     let casesUpdated = 0;
@@ -2138,7 +2188,8 @@ function showCanvasChat() {
         body: JSON.stringify({ 
           message: msg, 
           cases: allCases,
-          selectedCategory: state.selectedCategory // 传递选中的分类
+          selectedCategory: state.selectedCategory,
+          history: previousHistory
         }),
         signal: requestController.signal
       });
@@ -2179,18 +2230,20 @@ function showCanvasChat() {
                 newCasesAdded++;
                 
                 // 更新状态
-                updateIslandStatus('analyzing', `已添加 ${newCasesAdded} 条用例...`);
+                updateChatIslandStatus('analyzing', `已添加 ${newCasesAdded} 条用例...`);
               } else if (currentEvent === 'reply' && payload.text) {
                 scoutReply = payload.text;
                 if (!replyShown) {
                   addIslandMessage('scout', scoutReply);
+                  saveChatMessage('assistant', scoutReply);
                   replyShown = true;
                 }
+                stopWaitingFeedback();
                 removeIslandThinking(thinkingId);
               } else if (currentEvent === 'update' && payload.case) {
                 if (applyCaseUpdate(payload.case)) {
                   casesUpdated++;
-                  updateIslandStatus('analyzing', `已修改 ${casesUpdated} 条用例...`);
+                  updateChatIslandStatus('analyzing', `已修改 ${casesUpdated} 条用例...`);
                 }
               }
             } catch (e) {}
@@ -2214,18 +2267,23 @@ function showCanvasChat() {
       }
       
       // 显示 Prism 回复
-      if (!replyShown) addIslandMessage('scout', scoutReply);
+      if (!replyShown) {
+        addIslandMessage('scout', scoutReply);
+        saveChatMessage('assistant', scoutReply);
+      }
       
     } catch (e) {
       removeIslandThinking(thinkingId);
-      addIslandMessage('scout', e?.name === 'AbortError' ? '模型响应超时了，请再试一次' : '出了点问题，请稍后再试');
+      const errorReply = e?.name === 'AbortError' ? '模型响应超时了，请再试一次' : '出了点问题，请稍后再试';
+      addIslandMessage('scout', errorReply);
+      saveChatMessage('assistant', errorReply);
     } finally {
-      clearInterval(waitingTimer);
+      stopWaitingFeedback();
       clearTimeout(requestTimeout);
     }
     
     isChatting = false;
-    updateIslandStatus('ready', '可协作调整');
+    updateChatIslandStatus('ready', '可协作调整');
   }
   
   // 绑定事件（避免重复绑定）
@@ -2255,12 +2313,47 @@ function addIslandThinking() {
       <span class="prism-avatar" aria-hidden="true"></span>
     </div>
     <div class="island-thinking-bubble">
-      <span></span><span></span><span></span>
+      <div class="island-thinking-copy">
+        <strong class="island-thinking-label">正在理解你的调整</strong>
+        <small class="island-thinking-time">刚刚开始</small>
+      </div>
+      <div class="island-thinking-dots"><span></span><span></span><span></span></div>
     </div>
   `;
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
   return id;
+}
+
+function startIslandThinkingFeedback(thinkingId) {
+  const startedAt = Date.now();
+  let stopped = false;
+  const phases = [
+    { after: 0, label: '正在理解你的调整', status: '正在读取当前用例' },
+    { after: 3, label: '正在整理相关用例', status: '正在构建修改上下文' },
+    { after: 8, label: '模型正在分析', status: '结果生成后会立即显示' },
+    { after: 18, label: '仍在认真处理', status: '复杂调整可能需要一点时间' }
+  ];
+
+  const update = () => {
+    if (stopped) return;
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    const phase = [...phases].reverse().find(item => seconds >= item.after) || phases[0];
+    const thinking = document.getElementById(thinkingId);
+    const label = thinking?.querySelector('.island-thinking-label');
+    const time = thinking?.querySelector('.island-thinking-time');
+    if (label) label.textContent = phase.label;
+    if (time) time.textContent = seconds < 1 ? '刚刚开始' : `已等待 ${seconds} 秒`;
+    updateChatIslandStatus('analyzing', phase.status);
+  };
+
+  update();
+  const timer = setInterval(update, 1000);
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 // 移除灵动岛思考状态
@@ -3783,8 +3876,10 @@ async function saveSession(caseCount) {
   try {
     const session = await persistCurrentSession();
     console.log('会话已保存:', session.id);
+    return session;
   } catch (error) {
     console.error('[保存会话] 异常:', error);
+    throw error;
   }
 }
 
@@ -4021,6 +4116,10 @@ function loadSession(session) {
     state.requirementName = session.requirementName || session.title || state.rootTitle;
     state.requirementVersion = session.requirementVersion || 'V1.0';
     state.currentSessionId = session.id;
+    const storedChatHistory = Array.isArray(session.chatHistory) ? session.chatHistory : [];
+    const legacyChatHistory = storedChatHistory.length ? [] : loadLegacyChatHistory(session.id);
+    state.chatHistory = storedChatHistory.length ? storedChatHistory : legacyChatHistory;
+    if (legacyChatHistory.length) queueChatHistoryPersist();
     
     switchView('engine');
     
@@ -4049,7 +4148,7 @@ function loadSession(session) {
     
     // 显示灵动岛
     const totalCases = state.categories.reduce((sum, cat) => sum + (cat.cases?.length || 0), 0);
-    updateIslandStatus('ready', `${totalCases} 条用例就绪`);
+    updateChatIslandStatus('ready', `${totalCases} 条用例就绪`);
     const island = $('#dynamic-island');
     if (island) {
       island.classList.remove('hidden');

@@ -283,8 +283,10 @@ app.post('/api/generate-cases-stream', async (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
   });
+  res.flushHeaders?.();
 
   try {
     // 检查 generateCasesStream 是否存在
