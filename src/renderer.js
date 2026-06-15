@@ -2702,6 +2702,8 @@ async function executeAIRun(command, testCase = null) {
     </div>
   `;
   document.body.appendChild(island);
+  const executionController = new AbortController();
+  let stopRequested = false;
   
   // 绑定事件
   $('#btn-auto-run-expand').addEventListener('click', () => {
@@ -2716,7 +2718,16 @@ async function executeAIRun(command, testCase = null) {
     }
   });
   
-  $('#btn-auto-run-close').addEventListener('click', () => {
+  $('#btn-auto-run-close').addEventListener('click', async () => {
+    if (!runFinished && !stopRequested) {
+      stopRequested = true;
+      subtitle.textContent = '正在停止...';
+      spinner.classList.add('auto-run-spinner-error');
+      const stopRequest = fetch(`${API_BASE}/stop`, { method: 'POST' }).catch(() => null);
+      executionController.abort();
+      await stopRequest;
+      finishRun('error', 'Agent 已停止');
+    }
     island.style.opacity = '0';
     island.style.transform = 'scale(0.95) translateY(10px)';
     setTimeout(() => island.remove(), 300);
@@ -2809,6 +2820,7 @@ async function executeAIRun(command, testCase = null) {
     const response = await fetch(`${API_BASE}/execute-command-stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: executionController.signal,
       body: JSON.stringify({ command, testCase })
     });
     if (!response.ok) {
@@ -2835,8 +2847,13 @@ async function executeAIRun(command, testCase = null) {
           try {
             const payload = JSON.parse(line.slice(6));
             if (currentEvent === 'log') {
+              if (stopRequested) continue;
               appendLine(payload);
             } else if (currentEvent === 'complete') {
+              if (stopRequested || payload.stopped) {
+                finishRun('error', 'Agent 已停止');
+                continue;
+              }
               appendLine({ type: 'success', text: 'Agent 执行完毕' });
               if (payload.reportId) {
                 island.dataset.reportId = payload.reportId;
@@ -2857,6 +2874,10 @@ async function executeAIRun(command, testCase = null) {
       finishRun('error', '执行状态异常');
     }
   } catch (error) {
+    if (stopRequested || executionController.signal.aborted || error.name === 'AbortError') {
+      finishRun('error', 'Agent 已停止');
+      return;
+    }
     appendLine({ type: 'error', text: `连接失败: ${error.message}` });
     finishRun('error', 'Agent 执行失败');
   } finally {
@@ -3398,7 +3419,9 @@ async function saveCurrentScript(script) {
 async function executeLibraryScript(scriptId) {
   showIsland();
   toggleIslandExpanded(true);
+  const executionController = new AbortController();
   islandState.isRunning = true;
+  islandState.abortController = executionController;
   islandState.total = 1;
   updateIslandProgress(0, 1);
   updateIslandStatus('脚本执行中', '直接回放脚本，不调用大模型');
@@ -3408,6 +3431,7 @@ async function executeLibraryScript(scriptId) {
     const response = await fetch(`${API_BASE}/scripts/${encodeURIComponent(scriptId)}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: executionController.signal,
       body: '{}',
     });
     const reader = response.body.getReader();
@@ -3428,6 +3452,7 @@ async function executeLibraryScript(scriptId) {
           addIslandLog(payload.type || 'info', payload.text);
         } else if (currentEvent === 'complete') {
           islandState.isRunning = false;
+          islandState.abortController = null;
           islandState.lastReportId = payload.reportId || null;
           updateIslandProgress(1, 1);
           updateIslandStatus(payload.failed ? '脚本执行失败' : '脚本执行完成', `${payload.passed || 0} 通过, ${payload.failed || 0} 失败`);
@@ -3444,9 +3469,15 @@ async function executeLibraryScript(scriptId) {
       }
     }
   } catch (error) {
+    if (error.name === 'AbortError' || executionController.signal.aborted) return;
     islandState.isRunning = false;
+    islandState.abortController = null;
     updateIslandStatus('脚本执行失败', error.message);
     addIslandLog('error', error.message);
+  } finally {
+    if (islandState.abortController === executionController) {
+      islandState.abortController = null;
+    }
   }
 }
 

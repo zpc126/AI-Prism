@@ -359,7 +359,7 @@ app.post('/api/execute', async (req, res) => {
       });
       incrementStat('automation_runs', cases.length);
       
-      res.write(`event: complete\ndata: ${JSON.stringify({ success: true, ...result })}\n\n`);
+      res.write(`event: complete\ndata: ${JSON.stringify({ success: !result.stopped, ...result })}\n\n`);
     } catch (error) {
       res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
     } finally {
@@ -467,7 +467,7 @@ app.post('/api/execute-command-stream', async (req, res) => {
       res.write(`event: log\ndata: ${JSON.stringify(log)}\n\n`);
     });
     incrementStat('automation_runs', 1);
-    res.write(`event: complete\ndata: ${JSON.stringify({ success: result.failed === 0, ...result })}\n\n`);
+    res.write(`event: complete\ndata: ${JSON.stringify({ success: !result.stopped && result.failed === 0, ...result })}\n\n`);
   } catch (error) {
     res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
   } finally {

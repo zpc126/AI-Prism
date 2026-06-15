@@ -270,14 +270,26 @@ class PIEngineRunner {
           text: `命中脚本库：${savedScript.name}，直接回放，不调用大模型`,
         });
         const replayResult = await this.executeSavedScript(savedScript, onLog);
-        recordScriptRun(savedScript.id, {
-          success: replayResult.success,
-          reportId: this.reportId,
-        });
+        if (!replayResult.stopped) {
+          recordScriptRun(savedScript.id, {
+            success: replayResult.success,
+            reportId: this.reportId,
+          });
+        }
         if (replayResult.success) {
           return {
             status: 'passed',
             steps: replayResult.steps,
+            durationMs: Date.now() - startTime,
+            scriptId: savedScript.id,
+            reusedScript: true,
+          };
+        }
+        if (replayResult.stopped) {
+          return {
+            status: 'stopped',
+            steps: replayResult.steps,
+            errorMessage: '用户已停止执行',
             durationMs: Date.now() - startTime,
             scriptId: savedScript.id,
             reusedScript: true,
@@ -346,6 +358,15 @@ class PIEngineRunner {
       };
 
     } catch (error) {
+      if (this.stopped || error.code === 'EXECUTION_STOPPED') {
+        onLog({ type: 'system', text: '用户已停止执行' });
+        return {
+          status: 'stopped',
+          steps: [],
+          errorMessage: '用户已停止执行',
+          durationMs: Date.now() - startTime,
+        };
+      }
       onLog({ type: 'error', text: `执行失败: ${error.message}` });
       return {
         status: 'failed',
@@ -358,9 +379,22 @@ class PIEngineRunner {
 
   async executeSavedScript(script, onLog) {
     const stepResults = [];
+    this.ensureNotStopped();
     await launchBrowser();
+    if (this.stopped) {
+      const { closeBrowser } = require('../pi/tools/browser');
+      await closeBrowser();
+      return {
+        success: false,
+        stopped: true,
+        steps: stepResults,
+        error: '用户已停止执行',
+      };
+    }
+    this.ensureNotStopped();
 
     for (let index = 0; index < script.steps.length; index++) {
+      this.ensureNotStopped();
       const action = script.steps[index];
       const startedAt = Date.now();
       const description = this.describeScriptAction(action);
@@ -378,7 +412,7 @@ class PIEngineRunner {
             await fill(action.target, action.value || '');
             break;
           case 'wait':
-            await waitForElement(action.target);
+            await waitForElement(action.target, parseInt(action.value, 10) || 5000);
             break;
           case 'scroll':
             await scroll(action.target || 'down', parseInt(action.value, 10) || 500);
@@ -400,6 +434,7 @@ class PIEngineRunner {
           default:
             throw new Error(`不支持的脚本动作：${action.action}`);
         }
+        this.ensureNotStopped();
         stepResults.push({
           stepIndex: index + 1,
           description,
@@ -409,6 +444,14 @@ class PIEngineRunner {
         });
         onLog({ type: 'success', text: `脚本步骤 ${index + 1} 完成` });
       } catch (error) {
+        if (this.stopped || error.code === 'EXECUTION_STOPPED') {
+          return {
+            success: false,
+            stopped: true,
+            steps: stepResults,
+            error: '用户已停止执行',
+          };
+        }
         const captured = await screenshot(`script_error_${index + 1}`).catch(() => null);
         stepResults.push({
           stepIndex: index + 1,
@@ -423,11 +466,19 @@ class PIEngineRunner {
       }
     }
 
+    this.ensureNotStopped();
     const captured = await this.takeScreenshot('script_final');
     if (stepResults.length > 0 && captured?.filepath) {
       stepResults[stepResults.length - 1].screenshotPath = captured.filepath;
     }
     return { success: true, steps: stepResults };
+  }
+
+  ensureNotStopped() {
+    if (!this.stopped) return;
+    const error = new Error('用户已停止执行');
+    error.code = 'EXECUTION_STOPPED';
+    throw error;
   }
 
   describeScriptAction(action) {

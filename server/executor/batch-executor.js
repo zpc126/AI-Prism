@@ -84,6 +84,7 @@ class BatchExecutor {
 
     let passedCount = 0;
     let failedCount = 0;
+    let wasStopped = false;
     const startTime = Date.now();
 
     try {
@@ -142,6 +143,10 @@ class BatchExecutor {
           if (result.status === 'passed') {
             passedCount++;
             onLog({ type: 'success', text: `✓ ${testCase.title} 通过` });
+          } else if (result.status === 'stopped') {
+            wasStopped = true;
+            onLog({ type: 'system', text: '用户已停止执行，后续脚本不再运行' });
+            break;
           } else {
             failedCount++;
             onLog({ type: 'error', text: `✗ ${testCase.title} 失败: ${result.errorMessage}` });
@@ -180,7 +185,7 @@ class BatchExecutor {
 
     // 更新报告状态
     updateReport(report.id, {
-      status: 'completed',
+      status: wasStopped || this.stopped ? 'stopped' : 'completed',
       passed_cases: passedCount,
       failed_cases: failedCount,
       duration_ms: totalDuration,
@@ -188,7 +193,12 @@ class BatchExecutor {
     });
 
     onLog({ type: 'divider', text: '' });
-    onLog({ type: 'system', text: `执行完成: ${passedCount} 通过, ${failedCount} 失败` });
+    onLog({
+      type: 'system',
+      text: wasStopped || this.stopped
+        ? '执行已停止'
+        : `执行完成: ${passedCount} 通过, ${failedCount} 失败`,
+    });
     onLog({ type: 'system', text: `总耗时: ${(totalDuration / 1000).toFixed(1)}s` });
     onLog({ type: 'system', text: `报告: /api/reports/${report.id}/html` });
 
@@ -197,6 +207,7 @@ class BatchExecutor {
       total: cases.length,
       passed: passedCount,
       failed: failedCount,
+      stopped: wasStopped || this.stopped,
       durationMs: totalDuration,
     };
   }

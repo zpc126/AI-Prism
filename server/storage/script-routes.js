@@ -86,7 +86,7 @@ router.post('/:id/execute', async (req, res) => {
     }, log => {
       res.write(`event: log\ndata: ${JSON.stringify(log)}\n\n`);
     });
-    res.write(`event: complete\ndata: ${JSON.stringify({ success: result.failed === 0, ...result })}\n\n`);
+    res.write(`event: complete\ndata: ${JSON.stringify({ success: !result.stopped && result.failed === 0, ...result })}\n\n`);
   } catch (error) {
     res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
   } finally {
