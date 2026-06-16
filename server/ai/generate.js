@@ -695,73 +695,66 @@ async function extractRequirementFromImage(imageBase64) {
 }
 
 // 需求分析
-const ANALYSIS_PROMPT = `你是一位资深测试工程师，正在审阅一份产品需求文档。
+const ANALYSIS_PROMPT = `你是一位资深测试负责人，正在审阅一份产品需求文档。
 
-你的任务是：像真正的测试专家一样，找出这个需求中的风险点、边界场景、需要和产品经理确认的问题。
+你的任务不是简单挑错，而是输出一份可以直接给产品、研发、测试一起评审的需求分析报告：先讲清楚需求是什么，再拆模块、流程、规则、风险、测试范围和待确认问题。
 
 【重要：输出格式要求】
-你必须输出一个 JSON 数组，不要输出任何其他文字、解释或 markdown 格式。
+你必须只输出一个合法 JSON 对象，不要输出任何其他文字、解释或 markdown 格式。
 
 输出格式：
-[
-  {
-    "category": "风险类型",
-    "title": "问题标题",
-    "detail": "详细说明，包括为什么这是个问题、可能的影响",
-    "suggestion": "建议如何处理，或需要和产品确认什么"
-  }
-]
+{
+  "summary": "用 1-2 句话概括需求目标、核心用户和主要价值",
+  "modules": [
+    {
+      "name": "模块名称",
+      "goal": "模块目标",
+      "flows": ["关键流程 1", "关键流程 2"],
+      "rules": ["业务规则或状态流转"],
+      "data": ["关键字段、权限、状态或接口数据"]
+    }
+  ],
+  "risks": [
+    {
+      "category": "风险类型",
+      "severity": "P0/P1/P2/P3",
+      "title": "问题标题",
+      "detail": "详细说明，包括为什么这是问题、影响什么用户或流程",
+      "suggestion": "建议如何处理，或需要和产品确认什么",
+      "testFocus": "后续测试重点"
+    }
+  ],
+  "testScope": {
+    "inScope": ["明确需要覆盖的测试范围"],
+    "outOfScope": ["需求未说明或暂不建议纳入的范围"]
+  },
+  "questions": ["必须在开发/测试前确认的问题"],
+  "acceptance": ["建议的验收标准"],
+  "testStrategy": ["推荐的测试策略，例如冒烟、主流程、异常、兼容、回归、自动化优先级"]
+}
 
 【绝对重要】
-1. 直接输出 JSON 数组，不要用 \`\`\`json 包裹
+1. 直接输出 JSON 对象，不要用 \`\`\`json 包裹
 2. 不要在 JSON 前后输出任何文字
-3. 确保输出是合法的 JSON 格式
-4. 不要添加任何解释或说明
-5. 输出必须以 [ 开头，以 ] 结尾
+3. 确保输出是合法 JSON
+4. 输出必须以 { 开头，以 } 结尾
+5. 如果文档信息不足，要在 questions 中指出，不要编造不存在的规则
 
 【风险类型说明】
 - 边界未定义：需求中没有明确定义的边界条件
-- 逻辑漏洞：需求逻辑上存在的漏洞或矛盾
+- 逻辑漏洞：需求逻辑上存在漏洞或矛盾
 - 歧义描述：需求描述模糊，可能有多种理解
 - 遗漏场景：需求没有考虑到的用户场景
-- 技术风险：可能存在的技术实现风险
+- 数据风险：字段、状态、权限、接口、历史数据迁移等不清楚
+- 技术风险：可能存在的实现、性能、兼容或第三方依赖风险
 - 体验问题：可能导致用户体验不佳的设计
 
 【分析原则】
-1. 不要只列正常流程，要找真正的问题
-2. 每个问题都要具体，不要泛泛而谈
-3. 要站在用户和测试的角度思考
-4. 提出的问题应该是产品经理需要回答的
-5. 不要编造需求中没有的内容，只分析现有需求
-
-【示例】
-假设需求是「用户登录功能，支持手机号+验证码登录，密码登录，第三方微信登录」
-
-好的分析：
-[
-  {
-    "category": "边界未定义",
-    "title": "验证码过期时间未说明",
-    "detail": "需求提到支持验证码登录，但没有说明验证码的有效期。过期后是否需要重新获取？错误提示是什么？",
-    "suggestion": "建议和产品确认：验证码有效期（如5分钟）、过期提示文案、是否需要倒计时显示"
-  },
-  {
-    "category": "遗漏场景",
-    "title": "多次验证码错误的处理",
-    "detail": "用户连续输入错误验证码时如何处理？是否有次数限制？是否需要锁定账号？",
-    "suggestion": "建议确认：错误次数限制（如5次）、锁定时长（如30分钟）、提示文案"
-  }
-]
-
-不好的分析（太笼统）：
-[
-  {
-    "category": "异常场景",
-    "title": "登录失败处理",
-    "detail": "登录可能失败",
-    "suggestion": "处理失败情况"
-  }
-]
+1. 优先抽取真实模块和关键业务流程
+2. 风险要具体，能落到页面、字段、状态、角色、接口或操作
+3. 每个风险都要给测试关注点，方便后续生成用例
+4. 不要只列正常流程，要覆盖异常、边界、权限、数据一致性、兼容、回归影响
+5. 问题应该是产品经理、研发或测试负责人需要回答的
 
 现在，请分析以下需求：`;
 
@@ -848,6 +841,64 @@ function tryParseJsonArray(str) {
   return null;
 }
 
+function tryParseJsonObject(str) {
+  const candidates = [str];
+  const firstBrace = str.indexOf('{');
+  const lastBrace = str.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(str.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const result = JSON.parse(candidate);
+      if (result && typeof result === 'object' && !Array.isArray(result)) return result;
+    } catch (e) {}
+
+    try {
+      const fixed = fixJsonString(candidate);
+      const result = JSON.parse(fixed);
+      if (result && typeof result === 'object' && !Array.isArray(result)) return result;
+    } catch (e) {}
+  }
+
+  return null;
+}
+
+function normalizeAnalysisReport(payload) {
+  if (Array.isArray(payload)) {
+    return {
+      summary: '已识别需求中的主要风险和待确认问题。',
+      modules: [],
+      risks: payload,
+      testScope: { inScope: [], outOfScope: [] },
+      questions: payload.map(item => item.suggestion).filter(Boolean).slice(0, 8),
+      acceptance: [],
+      testStrategy: []
+    };
+  }
+
+  if (!payload || typeof payload !== 'object') return null;
+
+  const risks = Array.isArray(payload.risks)
+    ? payload.risks
+    : Array.isArray(payload.issues)
+      ? payload.issues
+      : [];
+
+  return {
+    summary: payload.summary || payload.overview || '已完成需求分析。',
+    modules: Array.isArray(payload.modules) ? payload.modules : [],
+    risks,
+    testScope: payload.testScope && typeof payload.testScope === 'object'
+      ? payload.testScope
+      : { inScope: [], outOfScope: [] },
+    questions: Array.isArray(payload.questions) ? payload.questions : [],
+    acceptance: Array.isArray(payload.acceptance) ? payload.acceptance : [],
+    testStrategy: Array.isArray(payload.testStrategy) ? payload.testStrategy : []
+  };
+}
+
 async function analyzeRequirement(content, retryCount = 0) {
   console.log('[分析] 开始需求分析...');
   const result = await callLLMForAnalysis(ANALYSIS_PROMPT, content);
@@ -889,31 +940,35 @@ async function analyzeRequirement(content, retryCount = 0) {
   }
   cleaned = cleaned.trim();
   
-  // 提取 JSON 数组部分（可能包含在其他文本中）
-  const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
-    cleaned = jsonMatch[0];
-  }
-  
   // 替换中文引号为标准 JSON 引号
   cleaned = cleaned.replace(/[\u201c\u201d\u2018\u2019]/g, '"');
   
-  // 尝试解析为 JSON 数组或对象
+  // 尝试解析为新报告对象或旧问题数组
+  let report = null;
   let issues = null;
   
   const trimmed = cleaned.trim();
+
+  if (trimmed.startsWith('{') || cleaned.includes('{')) {
+    console.log('[分析] 尝试解析 JSON 对象...');
+    report = normalizeAnalysisReport(tryParseJsonObject(cleaned));
+    if (!report) {
+      console.log('[分析] JSON 对象解析失败');
+    }
+  }
   
   // 策略1: 直接作为数组解析
-  if (trimmed.startsWith('[')) {
+  if (!report && (trimmed.startsWith('[') || cleaned.includes('['))) {
     console.log('[分析] 尝试解析 JSON 数组...');
-    issues = tryParseJsonArray(cleaned);
+    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+    issues = tryParseJsonArray(arrayMatch ? arrayMatch[0] : cleaned);
     if (!issues) {
       console.log('[分析] JSON 数组解析失败');
     }
   }
   
   // 策略2: 作为对象解析，提取数组
-  if (!issues && trimmed.startsWith('{')) {
+  if (!report && !issues && trimmed.startsWith('{')) {
     try {
       const fixed = fixJsonString(cleaned);
       const obj = JSON.parse(fixed);
@@ -926,20 +981,43 @@ async function analyzeRequirement(content, retryCount = 0) {
       }
     } catch (e) {}
   }
+
+  if (!report && issues) {
+    report = normalizeAnalysisReport(issues);
+  }
   
-  if (issues && issues.length > 0) {
-    console.log('[分析] JSON 解析成功，共 ' + issues.length + ' 个问题');
+  if (report) {
+    const risks = Array.isArray(report.risks) ? report.risks : [];
+    const riskCases = risks.map((issue, i) => ({
+      id: `analysis-risk-${i + 1}`,
+      title: issue.title || `风险 ${i + 1}`,
+      priority: issue.severity || 'P1',
+      steps: [issue.detail || issue.testFocus || ''],
+      expected: issue.suggestion || '',
+      category: issue.category || '风险',
+      testFocus: issue.testFocus || ''
+    }));
+
+    const questionCases = (report.questions || []).map((question, i) => ({
+      id: `analysis-question-${i + 1}`,
+      title: question,
+      priority: 'P1',
+      steps: ['该问题需要在开发或测试前确认，否则可能影响用例设计和验收口径。'],
+      expected: '请产品、研发、测试共同确认。',
+      category: '待确认'
+    }));
+
+    console.log('[分析] JSON 解析成功，模块 ' + report.modules.length + ' 个，风险 ' + riskCases.length + ' 个');
     return [{
       type: 'analysis',
       name: '需求分析',
-      cases: issues.map((issue, i) => ({
-        id: `analysis-${i + 1}`,
-        title: issue.title,
-        priority: 'P1',
-        steps: [issue.detail],
-        expected: issue.suggestion,
-        category: issue.category
-      }))
+      summary: report.summary,
+      modules: report.modules,
+      testScope: report.testScope,
+      questions: report.questions,
+      acceptance: report.acceptance,
+      testStrategy: report.testStrategy,
+      cases: [...riskCases, ...questionCases]
     }];
   }
   

@@ -361,8 +361,8 @@ function initViewInput() {
       btnText: '开始'
     },
     analyze: {
-      placeholder: '粘贴需求文档，我帮你检查逻辑漏洞和测试点...',
-      desc: '检查需求中的逻辑漏洞、遗漏场景、歧义描述',
+      placeholder: '粘贴需求文档，我帮你拆模块、理流程、找风险、定测试范围...',
+      desc: '输出需求摘要、模块拆解、风险问题、待确认项和测试策略',
       btnText: '分析'
     },
     run: {
@@ -2819,50 +2819,101 @@ async function startRequirementAnalysis() {
 function showAnalysisResult(categories) {
   const chatArea = $('#scout-chat');
   if (!chatArea) return;
-  
-  const issuesHtml = categories.map(cat => {
-    const items = cat.cases.map(c => {
-      const categoryColors = {
-        '边界未定义': 'bg-amber-500',
-        '逻辑漏洞': 'bg-red-500',
-        '歧义描述': 'bg-orange-500',
-        '遗漏场景': 'bg-purple-500',
-        '技术风险': 'bg-blue-500',
-        '体验问题': 'bg-green-500'
-      };
-      const colorClass = categoryColors[c.category] || 'bg-zinc-400';
-      
-      return `
-        <div class="p-3 border border-zinc-100 rounded-lg">
-          <div class="flex items-start gap-2">
-            <span class="w-1.5 h-1.5 rounded-full ${colorClass} mt-2 shrink-0"></span>
-            <div class="flex-1">
-              <div class="flex items-center gap-2">
-                <span class="text-[10px] px-1.5 py-0.5 bg-zinc-100 text-zinc-500 rounded">${escapeHtml(c.category || '问题')}</span>
-                <span class="text-sm text-zinc-700">${escapeHtml(c.title)}</span>
-              </div>
-              ${c.steps?.[0] ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed">${escapeHtml(c.steps[0])}</p>` : ''}
-              ${c.expected ? `<p class="text-xs text-zinc-400 mt-1 italic">建议：${escapeHtml(c.expected)}</p>` : ''}
+
+  const report = categories?.[0] || {};
+  const risks = (report.cases || []).filter(c => c.category !== '待确认');
+  const questions = report.questions?.length
+    ? report.questions
+    : (report.cases || []).filter(c => c.category === '待确认').map(c => c.title);
+  const modules = Array.isArray(report.modules) ? report.modules : [];
+  const testScope = report.testScope || {};
+  const acceptance = Array.isArray(report.acceptance) ? report.acceptance : [];
+  const testStrategy = Array.isArray(report.testStrategy) ? report.testStrategy : [];
+
+  const renderList = (items, emptyText = '暂无') => {
+    if (!items || items.length === 0) {
+      return `<p class="text-xs text-zinc-400">${emptyText}</p>`;
+    }
+    return `<ul class="space-y-1.5">${items.map(item => `
+      <li class="flex gap-2 text-xs text-zinc-600 leading-relaxed">
+        <span class="w-1 h-1 rounded-full bg-zinc-300 mt-2 shrink-0"></span>
+        <span>${escapeHtml(item)}</span>
+      </li>
+    `).join('')}</ul>`;
+  };
+
+  const renderSection = (title, html) => `
+    <div class="p-3 border border-zinc-100 rounded-xl bg-white">
+      <div class="text-xs font-medium text-zinc-700 mb-2">${title}</div>
+      ${html}
+    </div>
+  `;
+
+  const modulesHtml = modules.length ? modules.map(module => `
+    <div class="p-3 border border-zinc-100 rounded-xl bg-white">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-sm font-medium text-zinc-800">${escapeHtml(module.name || '未命名模块')}</div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600">模块</span>
+      </div>
+      ${module.goal ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed">${escapeHtml(module.goal)}</p>` : ''}
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+        <div>${renderList(module.flows || [], '暂无流程')}</div>
+        <div>${renderList(module.rules || [], '暂无规则')}</div>
+        <div>${renderList(module.data || [], '暂无数据点')}</div>
+      </div>
+    </div>
+  `).join('') : renderSection('模块拆解', '<p class="text-xs text-zinc-400">模型未识别到明确模块，可补充更完整需求后重新分析。</p>');
+
+  const categoryColors = {
+    '边界未定义': 'bg-amber-500',
+    '逻辑漏洞': 'bg-red-500',
+    '歧义描述': 'bg-orange-500',
+    '遗漏场景': 'bg-purple-500',
+    '数据风险': 'bg-cyan-500',
+    '技术风险': 'bg-blue-500',
+    '体验问题': 'bg-green-500'
+  };
+
+  const risksHtml = risks.length ? risks.map(c => {
+    const colorClass = categoryColors[c.category] || 'bg-zinc-400';
+    return `
+      <div class="p-3 border border-zinc-100 rounded-xl bg-white">
+        <div class="flex items-start gap-2">
+          <span class="w-1.5 h-1.5 rounded-full ${colorClass} mt-2 shrink-0"></span>
+          <div class="flex-1">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-[10px] px-1.5 py-0.5 bg-zinc-100 text-zinc-500 rounded">${escapeHtml(c.category || '风险')}</span>
+              <span class="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-500 rounded">${escapeHtml(c.priority || 'P1')}</span>
+              <span class="text-sm text-zinc-800 font-medium">${escapeHtml(c.title || '')}</span>
             </div>
+            ${c.steps?.[0] ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed">${escapeHtml(c.steps[0])}</p>` : ''}
+            ${c.expected ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed"><span class="text-zinc-400">建议：</span>${escapeHtml(c.expected)}</p>` : ''}
+            ${c.testFocus ? `<p class="text-xs text-blue-600 mt-1.5 leading-relaxed"><span class="text-blue-400">测试关注：</span>${escapeHtml(c.testFocus)}</p>` : ''}
           </div>
         </div>
-      `;
-    }).join('');
-    
-    return items;
-  }).join('');
+      </div>
+    `;
+  }).join('') : renderSection('风险问题', '<p class="text-xs text-zinc-400">暂未识别到高风险问题。</p>');
+
+  const scopeHtml = `
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      ${renderSection('建议覆盖', renderList(testScope.inScope || []))}
+      ${renderSection('暂不覆盖/需确认', renderList(testScope.outOfScope || []))}
+    </div>
+  `;
   
-  const totalIssues = categories.reduce((sum, cat) => sum + cat.cases.length, 0);
+  const totalIssues = risks.length + questions.length;
   
   // 生成纯文本用于复制
-  const plainText = categories.map(cat => {
-    return cat.cases.map(c => {
-      let text = `[${c.category || '问题'}] ${c.title}`;
-      if (c.steps?.[0]) text += `\n  ${c.steps[0]}`;
-      if (c.expected) text += `\n  建议：${c.expected}`;
-      return text;
-    }).join('\n');
-  }).join('\n\n');
+  const plainText = [
+    `# 需求分析报告`,
+    report.summary ? `\n## 摘要\n${report.summary}` : '',
+    modules.length ? `\n## 模块拆解\n${modules.map(m => `- ${m.name || '未命名模块'}：${m.goal || ''}\n  流程：${(m.flows || []).join('；') || '暂无'}\n  规则：${(m.rules || []).join('；') || '暂无'}\n  数据：${(m.data || []).join('；') || '暂无'}`).join('\n')}` : '',
+    risks.length ? `\n## 风险问题\n${risks.map(c => `- [${c.priority || 'P1'}][${c.category || '风险'}] ${c.title}\n  ${c.steps?.[0] || ''}\n  建议：${c.expected || ''}${c.testFocus ? `\n  测试关注：${c.testFocus}` : ''}`).join('\n')}` : '',
+    questions.length ? `\n## 待确认问题\n${questions.map(q => `- ${q}`).join('\n')}` : '',
+    acceptance.length ? `\n## 验收标准\n${acceptance.map(item => `- ${item}`).join('\n')}` : '',
+    testStrategy.length ? `\n## 测试策略\n${testStrategy.map(item => `- ${item}`).join('\n')}` : ''
+  ].filter(Boolean).join('\n');
   
   const reportEl = document.createElement('div');
   reportEl.className = 'scout-message';
@@ -2877,19 +2928,33 @@ function showAnalysisResult(categories) {
           <div class="px-4 py-3 border-b border-zinc-50 flex items-center justify-between">
             <div>
               <span class="text-sm font-medium text-zinc-700">需求分析报告</span>
-              <span class="text-xs text-zinc-400 ml-2">${totalIssues} 个问题</span>
+              <span class="text-xs text-zinc-400 ml-2">${modules.length} 个模块 · ${risks.length} 个风险 · ${questions.length} 个问题</span>
             </div>
             <button class="copy-report p-1.5 hover:bg-zinc-50 rounded-md transition-colors" title="复制报告">
               <svg class="w-4 h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
             </button>
           </div>
           <!-- 报告内容 -->
-          <div class="p-4 space-y-2 max-h-96 overflow-y-auto">
-            ${issuesHtml}
+          <div class="p-4 space-y-3 max-h-[32rem] overflow-y-auto bg-zinc-50/40">
+            ${report.summary ? `
+              <div class="p-3 rounded-xl bg-zinc-900 text-white">
+                <div class="text-[11px] text-zinc-300 mb-1">需求摘要</div>
+                <p class="text-sm leading-relaxed">${escapeHtml(report.summary)}</p>
+              </div>
+            ` : ''}
+            ${modulesHtml}
+            <div class="space-y-2">
+              <div class="text-xs font-medium text-zinc-700">风险与测试关注</div>
+              ${risksHtml}
+            </div>
+            ${scopeHtml}
+            ${renderSection('待确认问题', renderList(questions, '暂无待确认问题'))}
+            ${renderSection('验收标准', renderList(acceptance, '暂无验收标准'))}
+            ${renderSection('测试策略', renderList(testStrategy, '暂无测试策略'))}
           </div>
           <!-- 报告底部 -->
           <div class="px-4 py-2.5 bg-zinc-50 border-t border-zinc-100">
-            <p class="text-[11px] text-zinc-400">建议和产品经理确认后再进入开发</p>
+            <p class="text-[11px] text-zinc-400">建议先确认待确认问题，再进入用例生成和自动化沉淀</p>
           </div>
         </div>
       </div>
