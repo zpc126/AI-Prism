@@ -427,6 +427,12 @@ class Canvas {
   showActionBar(el, node) {
     // 移除已有的操作栏
     this.hideActionBar();
+    this.canvasContent.querySelectorAll('.mind-node-active').forEach(nodeEl => {
+      nodeEl.classList.remove('mind-node-active');
+      nodeEl.style.zIndex = '';
+    });
+    el.classList.add('mind-node-active');
+    el.style.zIndex = '300';
     
     const bar = document.createElement('div');
     bar.className = 'node-action-bar';
@@ -438,8 +444,7 @@ class Canvas {
       <button class="action-btn action-run" data-action="run">▶ 自动执行</button>
     `;
     
-    // 定位到节点下方
-    el.style.position = 'relative';
+    // 节点本身已经是 absolute，保持原定位，避免点击后发生位移。
     el.appendChild(bar);
     
     // 绑定事件
@@ -473,6 +478,10 @@ class Canvas {
   hideActionBar() {
     const bar = document.querySelector('.node-action-bar');
     if (bar) bar.remove();
+    this.canvasContent?.querySelectorAll('.mind-node-active').forEach(nodeEl => {
+      nodeEl.classList.remove('mind-node-active');
+      nodeEl.style.zIndex = '';
+    });
     if (this._hideHandler) {
       document.removeEventListener('click', this._hideHandler);
       this._hideHandler = null;

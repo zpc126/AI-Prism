@@ -511,6 +511,10 @@ body {
   transform: scale(1.02);
 }
 
+.mind-node-active {
+  z-index: 300 !important;
+}
+
 /* 根节点 */
 .node-root {
   background: var(--color-primary);
@@ -624,7 +628,7 @@ body {
   display: flex;
   gap: 2px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  z-index: 100;
+  z-index: 320;
   white-space: nowrap;
 }
 

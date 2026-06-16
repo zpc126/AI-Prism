@@ -20,6 +20,7 @@ data/config.json
 
 # Screenshots
 server/data/
+data/screenshots/
 
 # Test data (local testing artifacts)
 test-data/
