@@ -2618,6 +2618,110 @@ function updateLastPrismMessage(text) {
   }
 }
 
+function setEngineWorkspaceWidth(mode = 'normal') {
+  const workspace = $('#engine-center > div');
+  if (!workspace) return;
+  workspace.classList.toggle('max-w-lg', mode !== 'wide');
+  workspace.classList.toggle('max-w-4xl', mode === 'wide');
+}
+
+function createAnalysisProgressCard() {
+  const chatArea = $('#scout-chat');
+  if (!chatArea) return null;
+
+  const startedAt = Date.now();
+  const phases = [
+    '正在连接模型',
+    '正在阅读需求内容',
+    '正在拆模块和流程',
+    '正在识别风险与边界',
+    '正在整理分析报告'
+  ];
+
+  const card = document.createElement('div');
+  card.className = 'analysis-progress-card flex gap-3 scout-message';
+  card.innerHTML = `
+    <div class="w-7 h-7 rounded-full bg-zinc-800 flex items-center justify-center shrink-0 overflow-hidden">
+      <span class="prism-avatar" aria-hidden="true"></span>
+    </div>
+    <div class="flex-1">
+      <div class="bg-white border border-zinc-100 rounded-xl p-4 shadow-sm">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="analysis-progress-title text-sm font-medium text-zinc-800">正在连接模型</div>
+            <div class="analysis-progress-sub text-xs text-zinc-400 mt-1">已等待 0 秒，模型正在处理，不是卡住</div>
+          </div>
+          <div class="analysis-progress-spinner w-5 h-5 rounded-full border-2 border-zinc-200 border-t-indigo-500 animate-spin shrink-0"></div>
+        </div>
+        <div class="mt-3 h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+          <div class="analysis-progress-fill h-full bg-indigo-500 rounded-full transition-all duration-500" style="width: 12%"></div>
+        </div>
+        <div class="analysis-stream mt-3 hidden border border-zinc-100 rounded-lg bg-zinc-50 p-2 max-h-44 overflow-auto">
+          <pre class="analysis-stream-text whitespace-pre-wrap break-words text-[11px] leading-relaxed text-zinc-500"></pre>
+        </div>
+        <div class="analysis-progress-tip text-[11px] text-zinc-400 mt-2">下面会实时显示模型输出，看到文字流就说明还在跑。</div>
+      </div>
+    </div>
+  `;
+  chatArea.appendChild(card);
+  chatArea.scrollTop = chatArea.scrollHeight;
+
+  let index = 0;
+  const update = (title) => {
+    const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const phase = title || phases[Math.min(index, phases.length - 1)];
+    const percent = Math.min(92, 12 + elapsed * 2 + index * 12);
+    card.querySelector('.analysis-progress-title').textContent = phase;
+    card.querySelector('.analysis-progress-sub').textContent = `已等待 ${elapsed} 秒，模型正在处理，不是卡住`;
+    card.querySelector('.analysis-progress-fill').style.width = `${percent}%`;
+    if (elapsed >= 30) {
+      card.querySelector('.analysis-progress-tip').textContent = '还在持续等待模型。自定义模型慢一点没关系，只要连接不断就会继续接收。';
+    }
+    chatArea.scrollTop = chatArea.scrollHeight;
+  };
+
+  const timer = setInterval(() => {
+    index = Math.min(index + 1, phases.length - 1);
+    update();
+  }, 6000);
+
+  return {
+    update,
+    appendToken(text) {
+      if (!text) return;
+      const stream = card.querySelector('.analysis-stream');
+      const streamText = card.querySelector('.analysis-stream-text');
+      stream?.classList.remove('hidden');
+      streamText.textContent += text;
+      stream.scrollTop = stream.scrollHeight;
+      card.querySelector('.analysis-progress-title').textContent = '模型正在输出分析内容';
+      card.querySelector('.analysis-progress-sub').textContent = `已收到 ${streamText.textContent.length} 个字符，持续生成中`;
+      card.querySelector('.analysis-progress-fill').style.width = '88%';
+      chatArea.scrollTop = chatArea.scrollHeight;
+    },
+    done(title = '分析完成，正在展示报告') {
+      clearInterval(timer);
+      card.querySelector('.analysis-progress-title').textContent = title;
+      card.querySelector('.analysis-progress-sub').textContent = '模型已返回，报告整理好了';
+      card.querySelector('.analysis-progress-fill').style.width = '100%';
+      card.querySelector('.analysis-progress-spinner')?.classList.remove('animate-spin', 'border-t-indigo-500');
+      card.querySelector('.analysis-progress-spinner')?.classList.add('border-green-500');
+    },
+    fail(title = '分析失败') {
+      clearInterval(timer);
+      card.querySelector('.analysis-progress-title').textContent = title;
+      card.querySelector('.analysis-progress-sub').textContent = '这次请求没有正常完成，可以稍后重试';
+      card.querySelector('.analysis-progress-fill').classList.remove('bg-indigo-500');
+      card.querySelector('.analysis-progress-fill').classList.add('bg-red-500');
+      card.querySelector('.analysis-progress-spinner')?.classList.remove('animate-spin', 'border-t-indigo-500');
+      card.querySelector('.analysis-progress-spinner')?.classList.add('border-red-400');
+    },
+    stop() {
+      clearInterval(timer);
+    }
+  };
+}
+
 // ========== Agent 动态思考过程（优雅版） ==========
 let _thinkInterval = null;
 
@@ -2761,6 +2865,7 @@ function focusNewCaseNode(nodeElement) {
 async function startRequirementAnalysis() {
   console.log('[分析] 开始需求分析...');
   switchView('engine');
+  setEngineWorkspaceWidth('wide');
   
   const engineStatus = $('#engine-status');
   const engineCenter = $('#engine-center');
@@ -2775,11 +2880,14 @@ async function startRequirementAnalysis() {
   await scoutSay('收到，让我分析一下这个需求...', 800);
   await scoutSay('检查逻辑漏洞...', 600);
   await scoutSay('拆解测试点...', 600);
+  const progressCard = createAnalysisProgressCard();
   
   console.log('[分析] 调用 API...');
   
   try {
-    const response = await fetch(`${API_BASE}/generate-cases`, {
+    progressCard?.update('正在发送给模型分析');
+
+    const response = await fetch(`${API_BASE}/analyze-requirement-stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -2788,29 +2896,63 @@ async function startRequirementAnalysis() {
         mode: 'analyze'
       })
     });
-    
-    console.log('[分析] 收到响应');
-    const data = await response.json();
-    console.log('[分析] 解析 JSON 成功:', data.success);
-    
-    if (data.success) {
-      // 更新状态
-      if (engineStatus) engineStatus.textContent = '分析完成';
-      
-      await scoutSay('分析完成，发现了一些潜在问题 ↓', 300);
-      
-      // 显示结果弹窗
-      console.log('[分析] 显示结果...');
-      showAnalysisResult(data.cases);
-      console.log('[分析] 结果已显示');
-    } else {
-      throw new Error(data.error);
+
+    if (!response.ok || !response.body) {
+      throw new Error('流式分析接口不可用');
     }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+    let finalCases = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+          continue;
+        }
+        if (!line.startsWith('data: ')) continue;
+
+        const payload = JSON.parse(line.slice(6));
+        if (currentEvent === 'token') {
+          progressCard?.appendToken(payload.text || '');
+        } else if (currentEvent === 'progress') {
+          progressCard?.update(payload.message || '模型正在分析');
+          if (engineStatus) engineStatus.textContent = payload.message || '正在分析需求';
+        } else if (currentEvent === 'complete') {
+          finalCases = payload.cases;
+        } else if (currentEvent === 'error') {
+          throw new Error(payload.error || '分析失败');
+        }
+      }
+    }
+
+    if (!finalCases) throw new Error('模型没有返回分析报告');
+
+    if (engineStatus) engineStatus.textContent = '分析完成';
+    progressCard?.done();
+
+    await scoutSay('分析完成，我整理成报告了 ↓', 300);
+
+    console.log('[分析] 显示结果...');
+    showAnalysisResult(finalCases);
+    console.log('[分析] 结果已显示');
   } catch (error) {
     console.error('[分析] 错误:', error);
     if (engineStatus) engineStatus.textContent = '分析失败';
+    progressCard?.fail('分析失败');
     await scoutSay(`出了点问题：${error.message}`, 0);
   } finally {
+    progressCard?.stop();
     state.isAnalyzing = false;
   }
 }
@@ -2857,9 +2999,18 @@ function showAnalysisResult(categories) {
       </div>
       ${module.goal ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed">${escapeHtml(module.goal)}</p>` : ''}
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-        <div>${renderList(module.flows || [], '暂无流程')}</div>
-        <div>${renderList(module.rules || [], '暂无规则')}</div>
-        <div>${renderList(module.data || [], '暂无数据点')}</div>
+        <div>
+          <div class="text-[11px] font-medium text-zinc-500 mb-1.5">关键流程</div>
+          ${renderList(module.flows || [], '暂无流程')}
+        </div>
+        <div>
+          <div class="text-[11px] font-medium text-zinc-500 mb-1.5">业务规则</div>
+          ${renderList(module.rules || [], '暂无规则')}
+        </div>
+        <div>
+          <div class="text-[11px] font-medium text-zinc-500 mb-1.5">数据/权限</div>
+          ${renderList(module.data || [], '暂无数据点')}
+        </div>
       </div>
     </div>
   `).join('') : renderSection('模块拆解', '<p class="text-xs text-zinc-400">模型未识别到明确模块，可补充更完整需求后重新分析。</p>');
@@ -2876,6 +3027,21 @@ function showAnalysisResult(categories) {
 
   const risksHtml = risks.length ? risks.map(c => {
     const colorClass = categoryColors[c.category] || 'bg-zinc-400';
+    if (c.category === '格式异常') {
+      return `
+        <div class="p-3 border border-amber-100 rounded-xl bg-amber-50">
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">格式异常</span>
+            <span class="text-sm text-amber-900 font-medium">${escapeHtml(c.title || '模型返回格式异常')}</span>
+          </div>
+          <p class="text-xs text-amber-700 mt-1.5">模型返回了内容，但不是稳定的结构化 JSON。下面保留原文，方便复制排查。</p>
+          <details class="mt-2">
+            <summary class="text-xs text-amber-800 cursor-pointer">查看模型原文</summary>
+            <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed bg-white/70 border border-amber-100 rounded-lg p-2 text-zinc-600">${escapeHtml(c.steps?.[0] || '')}</pre>
+          </details>
+        </div>
+      `;
+    }
     return `
       <div class="p-3 border border-zinc-100 rounded-xl bg-white">
         <div class="flex items-start gap-2">

@@ -17,7 +17,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { loadConfig, saveWebConfig } = require('./config');
-const { generateCases, generateCasesStream, analyzeRequirement, callLLM, understandImage, extractRequirementFromImage } = require('./ai/generate');
+const { generateCases, generateCasesStream, analyzeRequirement, analyzeRequirementStream, callLLM, understandImage, extractRequirementFromImage } = require('./ai/generate');
 const { executeCases } = require('./executor/pi-runner');
 const { scrapeUrl, isUrlInput, extractUrls } = require('./scraper/url-scraper');
 const { recallWithAssociations, recordRecallUsage } = require('./brain/recall');
@@ -270,6 +270,65 @@ app.post('/api/generate-cases', async (req, res) => {
     console.error('生成用例失败:', error);
     res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// 需求分析 - 流式模式
+app.post('/api/analyze-requirement-stream', async (req, res) => {
+  let { content, productName = '' } = req.body;
+  if (!content) {
+    return res.status(400).json({ success: false, error: '请提供需求内容' });
+  }
+
+  if (isUrlInput(content)) {
+    try {
+      const scraped = await scrapeUrl(content);
+      content = scraped.content;
+      console.log(`[URL] 流式需求分析，已抓取: ${scraped.title}`);
+    } catch (e) {
+      console.error('[URL] 抓取失败，使用原始输入:', e.message);
+    }
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.flushHeaders?.();
+
+  const controller = new AbortController();
+  let responseFinished = false;
+  res.on('close', () => {
+    if (!responseFinished) {
+      console.log('[分析] 客户端连接关闭，停止模型分析');
+      controller.abort();
+    }
+  });
+
+  try {
+    const analysisContent = productName
+      ? `【产品/模块名称】${productName}\n【需求内容】\n${content}`
+      : content;
+    const enrichedContent = appendHistoricalCaseKnowledge(analysisContent);
+    await analyzeRequirementStream(enrichedContent, (event, data) => {
+      if (event === 'complete') {
+        recordModelUsage(enrichedContent, data.cases || []);
+      }
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }, { signal: controller.signal });
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      console.log('[分析] 模型分析已取消');
+    } else {
+      console.error('流式需求分析失败:', error);
+      res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
+    }
+  } finally {
+    responseFinished = true;
+  }
+
+  res.end();
 });
 
 // 生成用例 - 流式模式

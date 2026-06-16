@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { jsonrepair } = require('jsonrepair');
 const { getLLMConfig } = require('../config');
 
 function getChatCompletionsUrl(baseUrl) {
@@ -614,6 +615,81 @@ async function callLLMForAnalysis(systemPrompt, userContent) {
   return data.choices[0].message.content;
 }
 
+async function callLLMForAnalysisStream(systemPrompt, userContent, onToken, options = {}) {
+  const llmConfig = getLLMConfig();
+  const apiKey = llmConfig.apiKey;
+  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
+  const model = llmConfig.model || 'gpt-4';
+
+  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
+    headers['api-key'] = apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetchFn(getChatCompletionsUrl(baseUrl), {
+    method: 'POST',
+    headers,
+    signal: options.signal,
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent }
+      ],
+      temperature: 0.1,
+      stream: true
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'API 调用失败');
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('text/event-stream')) {
+    const responseText = await response.text();
+    const data = JSON.parse(responseText);
+    const content = data.choices?.[0]?.message?.content || '';
+    if (content) onToken(content);
+    return content;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let sseBuffer = '';
+  let rawText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    sseBuffer += decoder.decode(value, { stream: true });
+    const lines = sseBuffer.split('\n');
+    sseBuffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (!data || data === '[DONE]') continue;
+
+      try {
+        const json = JSON.parse(data);
+        const delta = json.choices?.[0]?.delta?.content || '';
+        if (!delta) continue;
+        rawText += delta;
+        onToken(delta);
+      } catch (e) {}
+    }
+  }
+
+  return rawText;
+}
+
 // 多模态 LLM 调用（支持图片）
 async function callLLMWithImage(systemPrompt, textContent, imageBase64, maxTokens = 1200) {
   const llmConfig = getLLMConfig();
@@ -800,22 +876,73 @@ function fixJsonString(str) {
   return result;
 }
 
+function parseJsonLoose(candidate) {
+  const variants = [
+    candidate,
+    fixJsonString(candidate)
+  ];
+
+  for (const variant of variants) {
+    try {
+      return JSON.parse(variant);
+    } catch (e) {}
+  }
+
+  for (const variant of variants) {
+    try {
+      return JSON.parse(jsonrepair(variant));
+    } catch (e) {}
+  }
+
+  return null;
+}
+
+function extractBalancedJson(str, openChar, closeChar) {
+  const start = str.indexOf(openChar);
+  if (start < 0) return '';
+
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = start; i < str.length; i++) {
+    const char = str[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (char === openChar) depth += 1;
+    if (char === closeChar) depth -= 1;
+
+    if (depth === 0) {
+      return str.slice(start, i + 1);
+    }
+  }
+
+  return str.slice(start);
+}
+
 // 尝试多策略解析 JSON 数组
 function tryParseJsonArray(str) {
   // 策略1: 直接解析
-  try {
-    const result = JSON.parse(str);
-    if (Array.isArray(result)) return result;
-  } catch (e) {}
+  const parsed = parseJsonLoose(str);
+  if (Array.isArray(parsed)) return parsed;
   
-  // 策略2: 修复后再解析
-  try {
-    const fixed = fixJsonString(str);
-    const result = JSON.parse(fixed);
-    if (Array.isArray(result)) return result;
-  } catch (e) {}
-  
-  // 策略3: 逐行尝试找到第一个有效 JSON 数组
+  // 策略2: 逐行尝试找到第一个有效 JSON 数组
   // 有些 LLM 在 JSON 前后加了解释文字
   const lines = str.split('\n');
   let jsonStart = -1;
@@ -825,17 +952,15 @@ function tryParseJsonArray(str) {
     if (lines[i].trim().endsWith(']')) jsonEnd = i;
   }
   if (jsonStart >= 0 && jsonEnd >= jsonStart) {
-    try {
-      const candidate = lines.slice(jsonStart, jsonEnd + 1).join('\n');
-      const result = JSON.parse(candidate);
-      if (Array.isArray(result)) return result;
-    } catch (e) {}
-    // 修复后重试
-    try {
-      const candidate = fixJsonString(lines.slice(jsonStart, jsonEnd + 1).join('\n'));
-      const result = JSON.parse(candidate);
-      if (Array.isArray(result)) return result;
-    } catch (e) {}
+    const candidate = lines.slice(jsonStart, jsonEnd + 1).join('\n');
+    const lineParsed = parseJsonLoose(candidate);
+    if (Array.isArray(lineParsed)) return lineParsed;
+  }
+
+  const balanced = extractBalancedJson(str, '[', ']');
+  if (balanced) {
+    const balancedParsed = parseJsonLoose(balanced);
+    if (Array.isArray(balancedParsed)) return balancedParsed;
   }
   
   return null;
@@ -843,23 +968,12 @@ function tryParseJsonArray(str) {
 
 function tryParseJsonObject(str) {
   const candidates = [str];
-  const firstBrace = str.indexOf('{');
-  const lastBrace = str.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    candidates.push(str.slice(firstBrace, lastBrace + 1));
-  }
+  const balanced = extractBalancedJson(str, '{', '}');
+  if (balanced) candidates.push(balanced);
 
   for (const candidate of candidates) {
-    try {
-      const result = JSON.parse(candidate);
-      if (result && typeof result === 'object' && !Array.isArray(result)) return result;
-    } catch (e) {}
-
-    try {
-      const fixed = fixJsonString(candidate);
-      const result = JSON.parse(fixed);
-      if (result && typeof result === 'object' && !Array.isArray(result)) return result;
-    } catch (e) {}
+    const result = parseJsonLoose(candidate);
+    if (result && typeof result === 'object' && !Array.isArray(result)) return result;
   }
 
   return null;
@@ -899,14 +1013,9 @@ function normalizeAnalysisReport(payload) {
   };
 }
 
-async function analyzeRequirement(content, retryCount = 0) {
-  console.log('[分析] 开始需求分析...');
-  const result = await callLLMForAnalysis(ANALYSIS_PROMPT, content);
-  console.log('[分析] LLM 返回结果长度:', result.length);
-  console.log('[分析] LLM 返回结果前200字符:', result.substring(0, 200));
-  
+function parseAnalysisText(result) {
   // 解析 JSON 结果
-  let cleaned = result.trim();
+  let cleaned = String(result || '').trim();
   
   // 尝试解析外层 JSON（某些 API 返回 {content: ...} 格式）
   try {
@@ -940,8 +1049,8 @@ async function analyzeRequirement(content, retryCount = 0) {
   }
   cleaned = cleaned.trim();
   
-  // 替换中文引号为标准 JSON 引号
-  cleaned = cleaned.replace(/[\u201c\u201d\u2018\u2019]/g, '"');
+  // 替换中文双引号为标准 JSON 引号，保留中文单引号，避免误伤内容里的自然语言引用
+  cleaned = cleaned.replace(/[\u201c\u201d]/g, '"');
   
   // 尝试解析为新报告对象或旧问题数组
   let report = null;
@@ -1007,7 +1116,6 @@ async function analyzeRequirement(content, retryCount = 0) {
       category: '待确认'
     }));
 
-    console.log('[分析] JSON 解析成功，模块 ' + report.modules.length + ' 个，风险 ' + riskCases.length + ' 个');
     return [{
       type: 'analysis',
       name: '需求分析',
@@ -1021,24 +1129,51 @@ async function analyzeRequirement(content, retryCount = 0) {
     }];
   }
   
-  // JSON 解析失败，如果还没重试过，再试一次
-  if (retryCount < 1) {
-    console.warn('[分析] JSON 解析失败，正在重试...');
-    return analyzeRequirement(content, retryCount + 1);
-  }
-  
-  console.warn('[分析] JSON 解析失败，返回原始文本');
+  console.warn('[分析] JSON 解析失败，返回降级报告，不再重复请求模型');
   return [{
     type: 'analysis',
     name: '需求分析',
+    summary: '模型已返回内容，但格式不完整，系统未能整理为结构化报告。',
+    modules: [],
+    testScope: { inScope: [], outOfScope: ['需要重新分析或复制原始内容人工查看'] },
+    questions: ['模型返回格式异常，建议重新点击分析或缩短需求内容后重试'],
+    acceptance: [],
+    testStrategy: ['先人工确认原始分析内容，再进入用例生成'],
     cases: [{
       id: 'analysis-1',
-      title: '分析结果',
+      title: '模型返回格式异常',
       priority: 'P1',
       steps: [result],
-      expected: '请查看分析结果'
+      expected: '建议重新分析，或复制原始内容人工查看',
+      category: '格式异常'
     }]
   }];
 }
 
-module.exports = { generateCases, generateCasesStream, analyzeRequirement, callLLM, callLLMWithImage, understandImage, extractRequirementFromImage };
+async function analyzeRequirement(content) {
+  console.log('[分析] 开始需求分析...');
+  const result = await callLLMForAnalysis(ANALYSIS_PROMPT, content);
+  console.log('[分析] LLM 返回结果长度:', result.length);
+  console.log('[分析] LLM 返回结果前200字符:', result.substring(0, 200));
+  return parseAnalysisText(result);
+}
+
+async function analyzeRequirementStream(content, onEvent, options = {}) {
+  console.log('[分析] 开始流式需求分析...');
+  let lastEmit = 0;
+  const rawText = await callLLMForAnalysisStream(ANALYSIS_PROMPT, content, (token) => {
+    const now = Date.now();
+    onEvent('token', { text: token });
+    if (now - lastEmit > 3000) {
+      lastEmit = now;
+      onEvent('progress', { message: '模型正在持续输出分析内容...' });
+    }
+  }, options);
+
+  console.log('[分析] 流式 LLM 返回结果长度:', rawText.length);
+  const analysis = parseAnalysisText(rawText);
+  onEvent('complete', { cases: analysis, rawText });
+  return analysis;
+}
+
+module.exports = { generateCases, generateCasesStream, analyzeRequirement, analyzeRequirementStream, callLLM, callLLMWithImage, understandImage, extractRequirementFromImage };
