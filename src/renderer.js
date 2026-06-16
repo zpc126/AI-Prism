@@ -72,6 +72,110 @@ function saveAnalysisHistory(report) {
   updateAnalysisHistoryEntry();
 }
 
+function updateAnalysisHistoryReport(updatedReport) {
+  const normalized = normalizeAnalysisHistoryReport(updatedReport);
+  const reports = getAnalysisHistory();
+  const index = reports.findIndex(item => item.id === normalized.id);
+  if (index >= 0) {
+    reports[index] = { ...reports[index], ...normalized };
+  } else {
+    reports.unshift(normalized);
+  }
+  localStorage.setItem(ANALYSIS_HISTORY_KEY, JSON.stringify(reports.slice(0, 50)));
+  updateAnalysisHistoryEntry();
+  return normalized;
+}
+
+function normalizeAnalysisHistoryReport(report = {}) {
+  return {
+    id: report.id || `analysis-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title: report.title || '需求分析报告',
+    createdAt: report.createdAt || report.time || report.date || new Date().toISOString(),
+    summary: report.summary || report.report?.summary || '',
+    requirement: report.requirement || report.source || '',
+    plainText: report.plainText || report.content || report.text || '',
+    report: report.report && typeof report.report === 'object' ? report.report : {}
+  };
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('浏览器拒绝复制，请手动复制链接');
+}
+
+function showManualCopyUrl(url) {
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm z-[260] flex items-center justify-center p-6';
+  modal.innerHTML = `
+    <div class="bg-white rounded-2xl border border-zinc-100 shadow-2xl w-full max-w-xl p-5">
+      <div class="flex items-center justify-between gap-4 mb-3">
+        <h3 class="text-base font-medium text-zinc-800">分享链接已生成</h3>
+        <button class="close-manual-copy p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">关闭</button>
+      </div>
+      <p class="text-xs text-zinc-400 mb-3">浏览器限制了自动复制，请手动复制下面的链接。</p>
+      <input class="manual-copy-url w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl text-zinc-700 bg-zinc-50" value="${escapeHtml(url)}" readonly>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  const input = modal.querySelector('.manual-copy-url');
+  input?.focus();
+  input?.select();
+  modal.querySelector('.close-manual-copy')?.addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', event => {
+    if (event.target === modal) modal.remove();
+  });
+}
+
+async function copyAnalysisReportUrl(report, button) {
+  const normalizedReport = normalizeAnalysisHistoryReport(report);
+  const originalText = button?.textContent || '复制链接';
+  let url = '';
+  try {
+    if (button) button.textContent = '生成链接...';
+    const response = await fetch(`${API_BASE}/analysis-reports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ report: normalizedReport })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '分享链接生成失败');
+    url = new URL(data.url, window.location.origin).toString();
+    await copyTextToClipboard(url);
+    if (button) {
+      button.textContent = '链接已复制';
+      setTimeout(() => { button.textContent = originalText; }, 1600);
+    }
+  } catch (error) {
+    if (url) {
+      showManualCopyUrl(url);
+      if (button) {
+        button.textContent = '手动复制';
+        setTimeout(() => { button.textContent = originalText; }, 1600);
+      }
+      return;
+    }
+    if (button) {
+      button.textContent = '生成失败';
+      setTimeout(() => { button.textContent = originalText; }, 1600);
+    }
+    console.error('分享链接生成失败:', error);
+  }
+}
+
 function updateAnalysisHistoryEntry() {
   const button = $('#btn-analysis-history');
   if (!button) return;
@@ -3220,7 +3324,8 @@ function showAnalysisHistoryModal() {
               </div>
               <div class="flex items-center gap-2 shrink-0">
                 <button class="open-analysis-history px-2.5 py-1.5 text-xs bg-zinc-900 text-white rounded-lg hover:bg-zinc-800 transition-colors">查看完整</button>
-                <button class="copy-analysis-history px-2.5 py-1.5 text-xs border border-zinc-200 rounded-lg text-zinc-500 hover:bg-white transition-colors">复制报告</button>
+                <button class="edit-analysis-history px-2.5 py-1.5 text-xs border border-zinc-200 rounded-lg text-zinc-500 hover:bg-white transition-colors">改标题</button>
+                <button class="copy-analysis-history px-2.5 py-1.5 text-xs border border-zinc-200 rounded-lg text-zinc-500 hover:bg-white transition-colors">复制链接</button>
               </div>
             </div>
             ${item.summary ? `<p class="text-xs text-zinc-500 leading-relaxed mt-3 line-clamp-2">${escapeHtml(item.summary)}</p>` : ''}
@@ -3250,19 +3355,25 @@ function showAnalysisHistoryModal() {
       if (report) showAnalysisHistoryDetail(report);
     });
   });
+  modal.querySelectorAll('.edit-analysis-history').forEach(button => {
+    button.addEventListener('click', () => {
+      const card = button.closest('[data-report-id]');
+      const report = reports.find(item => item.id === card?.dataset.reportId);
+      if (report) showEditAnalysisTitleModal(report, () => showAnalysisHistoryModal());
+    });
+  });
   modal.querySelectorAll('.copy-analysis-history').forEach(button => {
     button.addEventListener('click', async () => {
       const card = button.closest('[data-report-id]');
       const report = reports.find(item => item.id === card?.dataset.reportId);
       if (!report) return;
-      await navigator.clipboard.writeText(report.plainText || '');
-      button.textContent = '已复制';
-      setTimeout(() => { button.textContent = '复制报告'; }, 1600);
+      await copyAnalysisReportUrl(report, button);
     });
   });
 }
 
 function showAnalysisHistoryDetail(saved) {
+  saved = normalizeAnalysisHistoryReport(saved);
   const report = saved.report || {};
   const risks = (report.cases || []).filter(c => c.category !== '待确认');
   const questions = report.questions?.length
@@ -3282,12 +3393,13 @@ function showAnalysisHistoryDetail(saved) {
           <p class="text-xs text-zinc-400 mt-1">${formatDateTime(saved.createdAt)} · ${modules.length} 个模块 · ${risks.length} 个风险 · ${questions.length} 个问题</p>
         </div>
         <div class="flex items-center gap-2">
-          <button class="copy-analysis-detail px-3 py-1.5 text-xs border border-zinc-200 rounded-lg text-zinc-500 hover:bg-zinc-50 transition-colors">复制报告</button>
+          <button class="edit-analysis-detail px-3 py-1.5 text-xs bg-zinc-900 text-white rounded-lg hover:bg-zinc-800 transition-colors">编辑</button>
+          <button class="copy-analysis-detail px-3 py-1.5 text-xs border border-zinc-200 rounded-lg text-zinc-500 hover:bg-zinc-50 transition-colors">复制链接</button>
           <button class="close-analysis-detail p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">关闭</button>
         </div>
       </div>
       <div class="p-5 overflow-y-auto bg-zinc-50/60 space-y-4">
-        ${renderAnalysisReportBody({ report, risks, questions, modules, testScope, acceptance, testStrategy })}
+        ${renderAnalysisReportBody({ report, risks, questions, modules, testScope, acceptance, testStrategy, saved })}
       </div>
       <div class="px-5 py-3 bg-white border-t border-zinc-100 text-[11px] text-zinc-400">
         历史报告仅保存在当前浏览器，清理浏览器数据后会消失。
@@ -3299,14 +3411,59 @@ function showAnalysisHistoryDetail(saved) {
   detail.addEventListener('click', event => {
     if (event.target === detail) detail.remove();
   });
+  detail.querySelector('.edit-analysis-detail')?.addEventListener('click', () => {
+    showEditAnalysisTitleModal(saved, updated => {
+      detail.remove();
+      showAnalysisHistoryDetail(updated);
+    });
+  });
   detail.querySelector('.copy-analysis-detail')?.addEventListener('click', async event => {
-    await navigator.clipboard.writeText(saved.plainText || '');
-    event.currentTarget.textContent = '已复制';
-    setTimeout(() => { event.currentTarget.textContent = '复制报告'; }, 1600);
+    await copyAnalysisReportUrl(saved, event.currentTarget);
   });
 }
 
-function renderAnalysisReportBody({ report, risks, questions, modules, testScope, acceptance, testStrategy }) {
+function showEditAnalysisTitleModal(report, onSaved) {
+  const saved = normalizeAnalysisHistoryReport(report);
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm z-[260] flex items-center justify-center p-6';
+  modal.innerHTML = `
+    <div class="bg-white rounded-2xl border border-zinc-100 shadow-2xl w-full max-w-md p-5">
+      <div class="flex items-center justify-between gap-4 mb-4">
+        <h3 class="text-base font-medium text-zinc-800">修改报告标题</h3>
+        <button class="close-edit-title p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">关闭</button>
+      </div>
+      <label class="block text-xs text-zinc-500 mb-2">标题</label>
+      <input class="edit-analysis-title w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl text-zinc-700 focus:outline-none focus:border-zinc-400" value="${escapeHtml(saved.title || '需求分析报告')}" maxlength="80">
+      <div class="flex items-center justify-end gap-2 mt-5">
+        <button class="cancel-edit-title px-3 py-2 text-xs border border-zinc-200 rounded-lg text-zinc-500 hover:bg-zinc-50 transition-colors">取消</button>
+        <button class="save-edit-title px-3 py-2 text-xs bg-zinc-900 text-white rounded-lg hover:bg-zinc-800 transition-colors">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  const input = modal.querySelector('.edit-analysis-title');
+  input?.focus();
+  input?.select();
+  const close = () => modal.remove();
+  const save = () => {
+    const title = input?.value.trim() || '需求分析报告';
+    const updated = updateAnalysisHistoryReport({ ...saved, title });
+    close();
+    onSaved?.(updated);
+  };
+  modal.querySelector('.close-edit-title')?.addEventListener('click', close);
+  modal.querySelector('.cancel-edit-title')?.addEventListener('click', close);
+  modal.querySelector('.save-edit-title')?.addEventListener('click', save);
+  input?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') save();
+    if (event.key === 'Escape') close();
+  });
+  modal.addEventListener('click', event => {
+    if (event.target === modal) close();
+  });
+}
+
+function renderAnalysisReportBody({ report, risks, questions, modules, testScope, acceptance, testStrategy, saved }) {
   const renderList = (items, emptyText = '暂无') => {
     if (!items || items.length === 0) {
       return `<p class="text-xs text-zinc-400">${emptyText}</p>`;
@@ -3324,6 +3481,10 @@ function renderAnalysisReportBody({ report, risks, questions, modules, testScope
       ${html}
     </div>
   `;
+  const hasStructuredReport = Boolean(report.summary || modules.length || risks.length || questions.length || acceptance.length || testStrategy.length || testScope.inScope?.length || testScope.outOfScope?.length);
+  if (!hasStructuredReport) {
+    return renderSection('报告内容', `<p class="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap">${escapeHtml(saved?.plainText || saved?.summary || '这是一份旧版历史报告，暂无结构化内容。')}</p>`);
+  }
   const modulesHtml = modules.length ? modules.map(module => `
     <div class="p-3 border border-zinc-100 rounded-xl bg-white">
       <div class="flex items-center justify-between gap-2">

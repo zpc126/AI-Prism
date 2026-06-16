@@ -174,6 +174,8 @@ AI-Prism/
 | `/api/generate-cases` | POST | 生成测试用例 |
 | `/api/generate-cases-stream` | POST | 流式生成用例 |
 | `/api/generate-report` | POST | 生成测试报告 |
+| `/api/analysis-reports` | POST | 保存需求分析报告并生成分享链接，兼容旧版文本报告 |
+| `/analysis-reports/:id` | GET | 查看分享的需求分析报告 |
 | `/api/execute-stream` | POST | 执行测试（流式） |
 | `/api/stop` | POST | 停止执行 |
 | `/api/brain/fragments` | GET/POST | 知识碎片管理 |

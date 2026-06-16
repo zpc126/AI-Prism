@@ -16,6 +16,7 @@ data/*.db-wal
 data/reports/
 data/uploads/
 data/images/
+data/analysis-reports/
 data/config.json
 
 # Screenshots

@@ -1,6 +1,6 @@
-// input: dotenv、express、业务路由、Web 静态资源、图片 base64 请求
-// output: Prism Web 页面、HTTP API、WebSocket 服务
-// position: Web 应用服务入口，支持文档与图片需求分析
+// input: dotenv、express、业务路由、Web 静态资源、图片 base64 请求、分析报告分享请求
+// output: Prism Web 页面、HTTP API、WebSocket 服务、分析报告分享页
+// position: Web 应用服务入口，支持文档、图片需求分析与报告分享
 
 require('dotenv').config();
 
@@ -16,6 +16,8 @@ process.on('unhandledRejection', (reason, promise) => {
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 const { loadConfig, saveWebConfig } = require('./config');
 const { generateCases, generateCasesStream, analyzeRequirement, analyzeRequirementStream, callLLM, understandImage, extractRequirementFromImage } = require('./ai/generate');
 const { executeCases } = require('./executor/pi-runner');
@@ -101,6 +103,177 @@ try {
 }
 
 const app = express();
+const ANALYSIS_REPORT_DIR = path.join(__dirname, '../data/analysis-reports');
+
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getAnalysisReportPath(id) {
+  return path.join(ANALYSIS_REPORT_DIR, `${id}.json`);
+}
+
+function renderList(items = [], emptyText = '暂无') {
+  if (!Array.isArray(items) || items.length === 0) {
+    return `<p class="muted">${emptyText}</p>`;
+  }
+  return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+}
+
+function normalizeSharedAnalysisReport(input = {}) {
+  const id = String(input.id || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '');
+  return {
+    id,
+    title: input.title || '需求分析报告',
+    createdAt: input.createdAt || input.time || input.date || new Date().toISOString(),
+    summary: input.summary || input.report?.summary || '',
+    requirement: input.requirement || input.source || '',
+    plainText: input.plainText || input.content || input.text || '',
+    report: input.report && typeof input.report === 'object' ? input.report : {}
+  };
+}
+
+function renderAnalysisReportHtml(input) {
+  const saved = normalizeSharedAnalysisReport(input);
+  const report = saved.report || {};
+  const risks = (report.cases || []).filter(item => item.category !== '待确认');
+  const questions = Array.isArray(report.questions) && report.questions.length
+    ? report.questions
+    : (report.cases || []).filter(item => item.category === '待确认').map(item => item.title);
+  const modules = Array.isArray(report.modules) ? report.modules : [];
+  const testScope = report.testScope || {};
+  const acceptance = Array.isArray(report.acceptance) ? report.acceptance : [];
+  const testStrategy = Array.isArray(report.testStrategy) ? report.testStrategy : [];
+  const hasStructuredReport = Boolean(report.summary || modules.length || risks.length || questions.length || acceptance.length || testStrategy.length || testScope.inScope?.length || testScope.outOfScope?.length);
+  const section = (title, body) => `<section class="section"><h2>${title}</h2>${body}</section>`;
+  const categoryClasses = {
+    '边界未定义': 'tag-amber',
+    '逻辑漏洞': 'tag-red',
+    '歧义描述': 'tag-orange',
+    '遗漏场景': 'tag-purple',
+    '数据风险': 'tag-cyan',
+    '技术风险': 'tag-blue',
+    '体验问题': 'tag-green',
+    '格式异常': 'tag-amber'
+  };
+  const priorityClasses = {
+    P0: 'priority-high',
+    P1: 'priority-high',
+    P2: 'priority-mid',
+    P3: 'priority-low'
+  };
+  const modulesHtml = modules.length ? modules.map(module => `
+    <article class="module-card">
+      <div class="module-head"><h3>${escapeHtml(module.name || '未命名模块')}</h3><span>模块</span></div>
+      ${module.goal ? `<p>${escapeHtml(module.goal)}</p>` : ''}
+      <div class="module-grid">
+        <div><h4>关键流程</h4>${renderList(module.flows || [], '暂无流程')}</div>
+        <div><h4>业务规则</h4>${renderList(module.rules || [], '暂无规则')}</div>
+        <div><h4>数据/权限</h4>${renderList(module.data || [], '暂无数据点')}</div>
+      </div>
+    </article>
+  `).join('') : section('模块拆解', '<p class="muted">模型未识别到明确模块。</p>');
+  const risksHtml = risks.length ? risks.map(item => {
+    const tagClass = categoryClasses[item.category] || 'tag-zinc';
+    const priorityClass = priorityClasses[item.priority] || 'priority-mid';
+    return `
+      <article class="risk-card ${tagClass}">
+        <div class="risk-title">
+          <span class="risk-tag ${tagClass}">${escapeHtml(item.category || '风险')}</span>
+          <span class="priority-tag ${priorityClass}">${escapeHtml(item.priority || 'P1')}</span>
+          <strong>${escapeHtml(item.title || '')}</strong>
+        </div>
+        ${item.steps?.[0] ? `<p>${escapeHtml(item.steps[0])}</p>` : ''}
+        ${item.expected ? `<p><em>建议：</em>${escapeHtml(item.expected)}</p>` : ''}
+        ${item.testFocus ? `<p class="focus"><em>测试关注：</em>${escapeHtml(item.testFocus)}</p>` : ''}
+      </article>
+    `;
+  }).join('') : '<p class="muted">暂未识别到高风险问题。</p>';
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(saved.title || '需求分析报告')} - Prism</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f6f6f7; color: #27272a; font-family: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", sans-serif; }
+    .page { max-width: 1040px; margin: 0 auto; padding: 48px 24px; }
+    .header { background: #fff; border: 1px solid #e4e4e7; border-radius: 24px; padding: 28px; box-shadow: 0 18px 50px rgba(24,24,27,.06); }
+    .brand { color: #71717a; font-size: 13px; margin-bottom: 12px; }
+    h1 { margin: 0; font-size: 30px; letter-spacing: -0.04em; }
+    .meta { margin-top: 10px; color: #a1a1aa; font-size: 13px; }
+    .summary { margin-top: 22px; padding: 18px; border-radius: 18px; background: #18181b; color: #fafafa; line-height: 1.8; }
+    .content { margin-top: 18px; display: grid; gap: 14px; }
+    .section, .module-card, .risk-card { background: #fff; border: 1px solid #ececef; border-radius: 18px; padding: 18px; }
+    h2 { margin: 0 0 12px; font-size: 15px; letter-spacing: -0.02em; }
+    h3 { margin: 0; font-size: 15px; }
+    h4 { margin: 0 0 8px; font-size: 12px; color: #71717a; }
+    p, li { font-size: 13px; line-height: 1.8; color: #52525b; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.8 -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", sans-serif; color: #52525b; }
+    ul { margin: 0; padding-left: 18px; }
+    .module-head, .risk-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .module-head span, .risk-title span { font-size: 11px; padding: 2px 7px; border-radius: 999px; }
+    .risk-card { border-left-width: 4px; }
+    .risk-card.tag-amber { border-left-color: #f59e0b; }
+    .risk-card.tag-red { border-left-color: #ef4444; }
+    .risk-card.tag-orange { border-left-color: #f97316; }
+    .risk-card.tag-purple { border-left-color: #a855f7; }
+    .risk-card.tag-cyan { border-left-color: #06b6d4; }
+    .risk-card.tag-blue { border-left-color: #3b82f6; }
+    .risk-card.tag-green { border-left-color: #22c55e; }
+    .risk-card.tag-zinc { border-left-color: #a1a1aa; }
+    .risk-tag.tag-amber { background: #fef3c7; color: #b45309; }
+    .risk-tag.tag-red { background: #fee2e2; color: #dc2626; }
+    .risk-tag.tag-orange { background: #ffedd5; color: #ea580c; }
+    .risk-tag.tag-purple { background: #f3e8ff; color: #9333ea; }
+    .risk-tag.tag-cyan { background: #cffafe; color: #0891b2; }
+    .risk-tag.tag-blue { background: #dbeafe; color: #2563eb; }
+    .risk-tag.tag-green { background: #dcfce7; color: #16a34a; }
+    .risk-tag.tag-zinc { background: #f4f4f5; color: #71717a; }
+    .priority-tag.priority-high { background: #fee2e2; color: #dc2626; }
+    .priority-tag.priority-mid { background: #fef3c7; color: #b45309; }
+    .priority-tag.priority-low { background: #f4f4f5; color: #71717a; }
+    .module-grid { margin-top: 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .focus { color: #2563eb; }
+    .muted { color: #a1a1aa; }
+    .footer { margin-top: 18px; color: #a1a1aa; font-size: 12px; text-align: center; }
+    @media (max-width: 760px) { .module-grid { grid-template-columns: 1fr; } .page { padding: 24px 14px; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div class="brand">Prism · 需求分析报告</div>
+      <h1>${escapeHtml(saved.title || '需求分析报告')}</h1>
+      <div class="meta">${escapeHtml(saved.createdAt ? new Date(saved.createdAt).toLocaleString('zh-CN') : '')} · ${modules.length} 个模块 · ${risks.length} 个风险 · ${questions.length} 个问题</div>
+      ${report.summary ? `<div class="summary">${escapeHtml(report.summary)}</div>` : ''}
+    </header>
+    <div class="content">
+      ${hasStructuredReport ? `
+        ${modulesHtml}
+        ${section('风险与测试关注', risksHtml)}
+        <div class="module-grid">
+          ${section('建议覆盖', renderList(testScope.inScope || []))}
+          ${section('暂不覆盖/需确认', renderList(testScope.outOfScope || []))}
+        </div>
+        ${section('待确认问题', renderList(questions, '暂无待确认问题'))}
+        ${section('验收标准', renderList(acceptance, '暂无验收标准'))}
+        ${section('测试策略', renderList(testStrategy, '暂无测试策略'))}
+      ` : section('报告内容', `<pre>${escapeHtml(saved.plainText || saved.summary || '这是一份旧版历史报告，暂无结构化内容。')}</pre>`)}
+    </div>
+    <div class="footer">由 Prism 生成 · 分享链接可直接打开查看</div>
+  </main>
+</body>
+</html>`;
+}
+
 app.use(cors());
 app.use(express.json({ limit: '70mb' }));
 
@@ -137,6 +310,36 @@ app.use('/api/pi', piRoutes);
 // 健康检查
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// 需求分析报告分享
+app.post('/api/analysis-reports', (req, res) => {
+  try {
+    const report = normalizeSharedAnalysisReport(req.body?.report || {});
+    fs.mkdirSync(ANALYSIS_REPORT_DIR, { recursive: true });
+    const saved = { ...report, sharedAt: new Date().toISOString() };
+    fs.writeFileSync(getAnalysisReportPath(saved.id), JSON.stringify(saved, null, 2), 'utf-8');
+    res.json({ success: true, id: saved.id, url: `/analysis-reports/${saved.id}` });
+  } catch (error) {
+    console.error('保存分析报告失败:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/analysis-reports/:id', (req, res) => {
+  try {
+    const safeId = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    const filePath = getAnalysisReportPath(safeId);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send('分析报告不存在或已被清理');
+    }
+    const saved = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderAnalysisReportHtml(saved));
+  } catch (error) {
+    console.error('读取分析报告失败:', error);
+    res.status(500).send('分析报告读取失败');
+  }
 });
 
 app.get('/api/stats/home', (req, res) => {
