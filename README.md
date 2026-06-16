@@ -58,14 +58,63 @@ CUSTOM_MODEL=xxx
 
 设置页配置保存在 `data/config.json`；没有 Web 配置时会回退到环境变量。
 
-### 生产启动
+### 生产部署
 
 ```bash
+# 安装依赖
+npm install
+
+# 安装浏览器自动化运行环境
+npx playwright install chromium
+
+# Linux 服务器如缺少系统依赖，可额外执行
+npx playwright install-deps chromium
+
+# 构建前端样式
 npm run build
-npm start
+
+# 启动 Web 服务
+HOST=0.0.0.0 PORT=3000 NODE_ENV=production npm start
 ```
 
-默认监听 `127.0.0.1:3000`。需要容器或局域网访问时，可设置 `HOST=0.0.0.0` 和 `PORT`，并在公网部署前为配置接口增加访问控制。
+默认监听 `127.0.0.1:3000`。需要容器或局域网访问时，可设置 `HOST=0.0.0.0` 和 `PORT`。
+
+### 后台常驻
+
+推荐使用 PM2 管理进程：
+
+```bash
+npm install -g pm2
+HOST=0.0.0.0 PORT=3000 NODE_ENV=production pm2 start server/index.js --name prism-web
+pm2 save
+```
+
+### Nginx 反向代理
+
+如果绑定域名，可将 Nginx 转发到本地服务：
+
+```nginx
+server {
+  listen 80;
+  server_name your-domain.com;
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+```
+
+### 部署注意事项
+
+- `data/` 是运行时数据目录，会保存配置、报告、截图和 SQLite 数据，请确保服务器可写并定期备份。
+- `.env` 和 `data/config.json` 可能包含模型 API Key，不要提交到仓库。
+- 公网部署前，建议为配置接口和内部测试入口增加访问控制，或仅部署在内网。
+- Playwright 执行测试时会启动浏览器进程，服务器需要预留足够内存。
+- 部署完成后，建议先访问 `/api/health` 确认服务状态，再进入页面配置模型。
 
 ## 技术栈
 
