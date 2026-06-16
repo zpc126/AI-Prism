@@ -1985,6 +1985,10 @@ body {
 }
 
 /* ========== 执行状态灵动岛 ========== */
+#execution-island {
+  z-index: 300;
+}
+
 .island-container {
   width: 360px;
   background: #18181b;
