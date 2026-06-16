@@ -1,5 +1,5 @@
 /* input: 无 (纯样式文件)
-   output: 全局样式、组件样式
+   output: 全局样式、组件样式、历史分析报告入口样式
    position: 主样式文件 - 高级、克制、精致 */
 
 * {
@@ -1121,6 +1121,33 @@ body {
     opacity: 1; 
     transform: scale(1) translateY(0);
   }
+}
+
+.analysis-history-entry {
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid #e4e4e7;
+  border-radius: 14px;
+  background: #ffffff;
+  color: #71717a;
+  font-size: 13px;
+  transition: all 0.18s ease;
+}
+
+.analysis-history-entry:hover {
+  color: #27272a;
+  border-color: #d4d4d8;
+  background: #fafafa;
+}
+
+.analysis-history-card {
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.analysis-history-card:hover {
+  border-color: #d4d4d8;
+  background: #ffffff;
+  transform: translateY(-1px);
 }
 
 /* ========== Prism 对话 ========== */

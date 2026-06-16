@@ -1,5 +1,5 @@
-// input: 同源 Web API、canvas.js
-// output: 视图切换、分析流程、思维导图数据
+// input: 同源 Web API、canvas.js、本地历史分析报告
+// output: 视图切换、分析流程、思维导图数据、历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
@@ -54,6 +54,29 @@ window.removeFile = function(fileId) {
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
+const ANALYSIS_HISTORY_KEY = 'prism_analysis_reports';
+
+function getAnalysisHistory() {
+  try {
+    const reports = JSON.parse(localStorage.getItem(ANALYSIS_HISTORY_KEY) || '[]');
+    return Array.isArray(reports) ? reports : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAnalysisHistory(report) {
+  const reports = getAnalysisHistory();
+  reports.unshift(report);
+  localStorage.setItem(ANALYSIS_HISTORY_KEY, JSON.stringify(reports.slice(0, 50)));
+  updateAnalysisHistoryEntry();
+}
+
+function updateAnalysisHistoryEntry() {
+  const button = $('#btn-analysis-history');
+  if (!button) return;
+  button.classList.toggle('hidden', state.activeTab !== 'analyze');
+}
 
 function getChatHistory() {
   return state.chatHistory.slice(-30);
@@ -401,8 +424,12 @@ function initViewInput() {
       tabDesc.textContent = config.desc;
       btnStart.textContent = config.btnText;
       updateStartButton();
+      updateAnalysisHistoryEntry();
     });
   });
+
+  $('#btn-analysis-history')?.addEventListener('click', showAnalysisHistoryModal);
+  updateAnalysisHistoryEntry();
 
   input.addEventListener('input', () => {
     state.requirement = input.value.trim();
@@ -2944,7 +2971,10 @@ async function startRequirementAnalysis() {
     await scoutSay('分析完成，我整理成报告了 ↓', 300);
 
     console.log('[分析] 显示结果...');
-    showAnalysisResult(finalCases);
+    const savedReport = showAnalysisResult(finalCases);
+    if (savedReport) {
+      saveAnalysisHistory(savedReport);
+    }
     console.log('[分析] 结果已显示');
   } catch (error) {
     console.error('[分析] 错误:', error);
@@ -3081,6 +3111,19 @@ function showAnalysisResult(categories) {
     testStrategy.length ? `\n## 测试策略\n${testStrategy.map(item => `- ${item}`).join('\n')}` : ''
   ].filter(Boolean).join('\n');
   
+  const historyReport = {
+    id: `analysis_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    title: getMindMapRootTitle() || '需求分析报告',
+    requirement: state.requirement,
+    createdAt: new Date().toISOString(),
+    summary: report.summary || '',
+    moduleCount: modules.length,
+    riskCount: risks.length,
+    questionCount: questions.length,
+    report,
+    plainText
+  };
+
   const reportEl = document.createElement('div');
   reportEl.className = 'scout-message';
   reportEl.innerHTML = `
@@ -3147,6 +3190,193 @@ function showAnalysisResult(categories) {
   
   // 滚动到底部
   chatArea.scrollTop = chatArea.scrollHeight;
+  return historyReport;
+}
+
+function showAnalysisHistoryModal() {
+  const reports = getAnalysisHistory();
+  const existing = document.getElementById('analysis-history-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'analysis-history-modal';
+  modal.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm z-[220] flex items-center justify-center p-6';
+  modal.innerHTML = `
+    <div class="analysis-history-modal bg-white rounded-2xl border border-zinc-100 shadow-2xl w-full max-w-4xl max-h-[82vh] overflow-hidden flex flex-col">
+      <div class="px-5 py-4 border-b border-zinc-100 flex items-center justify-between">
+        <div>
+          <h3 class="text-base font-medium text-zinc-800">历史分析报告</h3>
+          <p class="text-xs text-zinc-400 mt-1">保留最近 ${reports.length} 份需求分析结果</p>
+        </div>
+        <button id="close-analysis-history" class="p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">关闭</button>
+      </div>
+      <div class="analysis-history-list flex-1 overflow-y-auto p-4 space-y-3">
+        ${reports.length ? reports.map(item => `
+          <article class="analysis-history-card border border-zinc-100 rounded-xl bg-zinc-50/40 p-4 cursor-pointer" data-report-id="${escapeHtml(item.id)}">
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <div class="text-sm font-medium text-zinc-800 truncate">${escapeHtml(item.title || '需求分析报告')}</div>
+                <div class="text-xs text-zinc-400 mt-1">${formatDateTime(item.createdAt)} · ${item.moduleCount || 0} 模块 · ${item.riskCount || 0} 风险 · ${item.questionCount || 0} 问题</div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <button class="open-analysis-history px-2.5 py-1.5 text-xs bg-zinc-900 text-white rounded-lg hover:bg-zinc-800 transition-colors">查看完整</button>
+                <button class="copy-analysis-history px-2.5 py-1.5 text-xs border border-zinc-200 rounded-lg text-zinc-500 hover:bg-white transition-colors">复制报告</button>
+              </div>
+            </div>
+            ${item.summary ? `<p class="text-xs text-zinc-500 leading-relaxed mt-3 line-clamp-2">${escapeHtml(item.summary)}</p>` : ''}
+            ${item.requirement ? `<details class="mt-3"><summary class="text-xs text-zinc-400 cursor-pointer">查看原始需求</summary><p class="text-xs text-zinc-500 leading-relaxed mt-2 whitespace-pre-wrap">${escapeHtml(item.requirement)}</p></details>` : ''}
+          </article>
+        `).join('') : '<div class="py-16 text-center text-sm text-zinc-400">还没有历史分析报告</div>'}
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.querySelector('#close-analysis-history')?.addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', event => {
+    if (event.target === modal) modal.remove();
+  });
+  modal.querySelectorAll('[data-report-id]').forEach(card => {
+    card.addEventListener('click', event => {
+      if (event.target.closest('button') || event.target.closest('details')) return;
+      const report = reports.find(item => item.id === card.dataset.reportId);
+      if (report) showAnalysisHistoryDetail(report);
+    });
+  });
+  modal.querySelectorAll('.open-analysis-history').forEach(button => {
+    button.addEventListener('click', () => {
+      const card = button.closest('[data-report-id]');
+      const report = reports.find(item => item.id === card?.dataset.reportId);
+      if (report) showAnalysisHistoryDetail(report);
+    });
+  });
+  modal.querySelectorAll('.copy-analysis-history').forEach(button => {
+    button.addEventListener('click', async () => {
+      const card = button.closest('[data-report-id]');
+      const report = reports.find(item => item.id === card?.dataset.reportId);
+      if (!report) return;
+      await navigator.clipboard.writeText(report.plainText || '');
+      button.textContent = '已复制';
+      setTimeout(() => { button.textContent = '复制报告'; }, 1600);
+    });
+  });
+}
+
+function showAnalysisHistoryDetail(saved) {
+  const report = saved.report || {};
+  const risks = (report.cases || []).filter(c => c.category !== '待确认');
+  const questions = report.questions?.length
+    ? report.questions
+    : (report.cases || []).filter(c => c.category === '待确认').map(c => c.title);
+  const modules = Array.isArray(report.modules) ? report.modules : [];
+  const testScope = report.testScope || {};
+  const acceptance = Array.isArray(report.acceptance) ? report.acceptance : [];
+  const testStrategy = Array.isArray(report.testStrategy) ? report.testStrategy : [];
+  const detail = document.createElement('div');
+  detail.className = 'fixed inset-0 bg-black/25 backdrop-blur-sm z-[230] flex items-center justify-center p-6';
+  detail.innerHTML = `
+    <div class="bg-white rounded-2xl border border-zinc-100 shadow-2xl w-full max-w-5xl max-h-[88vh] overflow-hidden flex flex-col">
+      <div class="px-5 py-4 border-b border-zinc-100 flex items-center justify-between">
+        <div>
+          <h3 class="text-base font-medium text-zinc-800">${escapeHtml(saved.title || '需求分析报告')}</h3>
+          <p class="text-xs text-zinc-400 mt-1">${formatDateTime(saved.createdAt)} · ${modules.length} 个模块 · ${risks.length} 个风险 · ${questions.length} 个问题</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="copy-analysis-detail px-3 py-1.5 text-xs border border-zinc-200 rounded-lg text-zinc-500 hover:bg-zinc-50 transition-colors">复制报告</button>
+          <button class="close-analysis-detail p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">关闭</button>
+        </div>
+      </div>
+      <div class="p-5 overflow-y-auto bg-zinc-50/60 space-y-4">
+        ${renderAnalysisReportBody({ report, risks, questions, modules, testScope, acceptance, testStrategy })}
+      </div>
+      <div class="px-5 py-3 bg-white border-t border-zinc-100 text-[11px] text-zinc-400">
+        历史报告仅保存在当前浏览器，清理浏览器数据后会消失。
+      </div>
+    </div>
+  `;
+  document.body.appendChild(detail);
+  detail.querySelector('.close-analysis-detail')?.addEventListener('click', () => detail.remove());
+  detail.addEventListener('click', event => {
+    if (event.target === detail) detail.remove();
+  });
+  detail.querySelector('.copy-analysis-detail')?.addEventListener('click', async event => {
+    await navigator.clipboard.writeText(saved.plainText || '');
+    event.currentTarget.textContent = '已复制';
+    setTimeout(() => { event.currentTarget.textContent = '复制报告'; }, 1600);
+  });
+}
+
+function renderAnalysisReportBody({ report, risks, questions, modules, testScope, acceptance, testStrategy }) {
+  const renderList = (items, emptyText = '暂无') => {
+    if (!items || items.length === 0) {
+      return `<p class="text-xs text-zinc-400">${emptyText}</p>`;
+    }
+    return `<ul class="space-y-1.5">${items.map(item => `
+      <li class="flex gap-2 text-xs text-zinc-600 leading-relaxed">
+        <span class="w-1 h-1 rounded-full bg-zinc-300 mt-2 shrink-0"></span>
+        <span>${escapeHtml(item)}</span>
+      </li>
+    `).join('')}</ul>`;
+  };
+  const renderSection = (title, html) => `
+    <div class="p-3 border border-zinc-100 rounded-xl bg-white">
+      <div class="text-xs font-medium text-zinc-700 mb-2">${title}</div>
+      ${html}
+    </div>
+  `;
+  const modulesHtml = modules.length ? modules.map(module => `
+    <div class="p-3 border border-zinc-100 rounded-xl bg-white">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-sm font-medium text-zinc-800">${escapeHtml(module.name || '未命名模块')}</div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600">模块</span>
+      </div>
+      ${module.goal ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed">${escapeHtml(module.goal)}</p>` : ''}
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+        <div><div class="text-[11px] font-medium text-zinc-500 mb-1.5">关键流程</div>${renderList(module.flows || [], '暂无流程')}</div>
+        <div><div class="text-[11px] font-medium text-zinc-500 mb-1.5">业务规则</div>${renderList(module.rules || [], '暂无规则')}</div>
+        <div><div class="text-[11px] font-medium text-zinc-500 mb-1.5">数据/权限</div>${renderList(module.data || [], '暂无数据点')}</div>
+      </div>
+    </div>
+  `).join('') : renderSection('模块拆解', '<p class="text-xs text-zinc-400">模型未识别到明确模块。</p>');
+  const risksHtml = risks.length ? risks.map(c => `
+    <div class="p-3 border border-zinc-100 rounded-xl bg-white">
+      <div class="flex items-start gap-2">
+        <span class="w-1.5 h-1.5 rounded-full bg-zinc-400 mt-2 shrink-0"></span>
+        <div class="flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-[10px] px-1.5 py-0.5 bg-zinc-100 text-zinc-500 rounded">${escapeHtml(c.category || '风险')}</span>
+            <span class="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-500 rounded">${escapeHtml(c.priority || 'P1')}</span>
+            <span class="text-sm text-zinc-800 font-medium">${escapeHtml(c.title || '')}</span>
+          </div>
+          ${c.steps?.[0] ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed">${escapeHtml(c.steps[0])}</p>` : ''}
+          ${c.expected ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed"><span class="text-zinc-400">建议：</span>${escapeHtml(c.expected)}</p>` : ''}
+          ${c.testFocus ? `<p class="text-xs text-blue-600 mt-1.5 leading-relaxed"><span class="text-blue-400">测试关注：</span>${escapeHtml(c.testFocus)}</p>` : ''}
+        </div>
+      </div>
+    </div>
+  `).join('') : renderSection('风险问题', '<p class="text-xs text-zinc-400">暂未识别到高风险问题。</p>');
+  return `
+    ${report.summary ? `<div class="p-4 rounded-xl bg-zinc-900 text-white"><div class="text-[11px] text-zinc-300 mb-1">需求摘要</div><p class="text-sm leading-relaxed">${escapeHtml(report.summary)}</p></div>` : ''}
+    ${modulesHtml}
+    <div class="space-y-2"><div class="text-xs font-medium text-zinc-700">风险与测试关注</div>${risksHtml}</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      ${renderSection('建议覆盖', renderList(testScope.inScope || []))}
+      ${renderSection('暂不覆盖/需确认', renderList(testScope.outOfScope || []))}
+    </div>
+    ${renderSection('待确认问题', renderList(questions, '暂无待确认问题'))}
+    ${renderSection('验收标准', renderList(acceptance, '暂无验收标准'))}
+    ${renderSection('测试策略', renderList(testStrategy, '暂无测试策略'))}
+  `;
+}
+
+function formatDateTime(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 }
 
 // ========== AI 代跑 ==========

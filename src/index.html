@@ -1,5 +1,5 @@
 <!-- input: 用户需求、配置和自动化执行入口 -->
-<!-- output: Prism 主界面、画布、报告与大脑入口 -->
+<!-- output: Prism 主界面、画布、报告、大脑入口与历史分析报告入口 -->
 <!-- position: 前端主页面结构 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -151,9 +151,14 @@
               <span class="px-2 py-0.5 bg-zinc-100 text-zinc-500 text-xs rounded">图片</span>
             </div>
             
-            <button id="btn-start" class="btn-start" disabled>
-              开始
-            </button>
+            <div class="flex items-center gap-2">
+              <button id="btn-analysis-history" class="analysis-history-entry hidden" type="button">
+                历史报告
+              </button>
+              <button id="btn-start" class="btn-start" disabled>
+                开始
+              </button>
+            </div>
           </div>
         </div>
         
