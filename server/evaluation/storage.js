@@ -4,14 +4,17 @@
 
 const Database = require('better-sqlite3');
 const path = require('path');
-const { app } = require('electron');
+const fs = require('fs');
+
+const DATA_DIR = path.join(__dirname, '../../data');
+const DB_PATH = path.join(DATA_DIR, 'eval.sqlite');
 
 let db;
 
 function getDb() {
   if (db) return db;
-  const dbPath = path.join(app.getPath('userData'), 'scout.sqlite');
-  db = new Database(dbPath);
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  db = new Database(DB_PATH);
   
   // 创建表
   db.exec(`
@@ -124,6 +127,13 @@ function updateRun(id, { status, duration_ms, results, report }) {
 }
 
 module.exports = {
-  listDatasets, getDataset, createDataset, updateDataset, deleteDataset,
-  listRuns, getRun, createRun, updateRun
+  listDatasets,
+  getDataset,
+  createDataset,
+  updateDataset,
+  deleteDataset,
+  listRuns,
+  getRun,
+  createRun,
+  updateRun
 };

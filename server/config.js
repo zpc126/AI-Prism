@@ -1,10 +1,9 @@
-// input: Web/Electron 配置文件路径、环境变量
+// input: Web 配置文件路径、环境变量
 // output: 当前激活的 LLM 提供商配置
-// position: 服务器端配置中心，支持 Web、Electron 和环境变量
+// position: 服务器端 Web 配置中心
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
 const defaultConfig = {
   provider: 'openai',
@@ -80,47 +79,13 @@ function saveWebConfig(config) {
   return merged;
 }
 
-// Electron 配置文件路径
-function getElectronConfigPath() {
-  const platform = process.platform;
-  let userDataPath;
-  
-  switch (platform) {
-    case 'darwin':
-      userDataPath = path.join(os.homedir(), 'Library/Application Support/Prism');
-      break;
-    case 'win32':
-      userDataPath = path.join(process.env.APPDATA || '', 'Prism');
-      break;
-    case 'linux':
-      userDataPath = path.join(os.homedir(), '.config/Prism');
-      break;
-    default:
-      userDataPath = path.join(os.homedir(), '.prism');
-  }
-  
-  return path.join(userDataPath, 'config.json');
-}
-
-// 读取 Electron 配置
-function loadElectronConfig() {
-  return loadJsonConfig(getElectronConfigPath(), ' Electron');
-}
-
-function loadRuntimeConfig() {
-  return process.env.SCOUT_RUNTIME === 'electron'
-    ? loadElectronConfig()
-    : loadWebConfig();
-}
-
 function loadConfig() {
-  return mergeConfig(defaultConfig, loadRuntimeConfig() || {});
+  return mergeConfig(defaultConfig, loadWebConfig() || {});
 }
 
 // 获取当前激活的 LLM 配置
 function getLLMConfig() {
-  // Web 与 Electron 配置隔离，避免 Web 接口暴露桌面端凭据
-  const savedConfig = loadRuntimeConfig();
+  const savedConfig = loadWebConfig();
   
   if (savedConfig && savedConfig.provider) {
     const provider = savedConfig.provider;
@@ -185,7 +150,5 @@ module.exports = {
   loadConfig,
   loadWebConfig,
   saveWebConfig,
-  loadElectronConfig,
-  getWebConfigPath,
-  getElectronConfigPath
+  getWebConfigPath
 };

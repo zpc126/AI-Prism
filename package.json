@@ -2,17 +2,11 @@
   "name": "prism",
   "version": "1.0.0",
   "description": "Prism Web - AI 驱动的 QA 分身，让 AI 帮你测试企业内部系统",
-  "main": "electron/main.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "npm run build:css && NODE_ENV=development node server/index.js",
-    "desktop": "electron .",
-    "dev:desktop": "npm run build:css && NODE_ENV=development concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:client": "NODE_ENV=development electron .",
-    "dev:server": "node server/index.js",
     "build:css": "npx tailwindcss -i ./src/styles/tailwind-input.css -o ./src/styles/tailwind-output.css --minify",
     "build": "npm run build:css",
-    "build:desktop": "npm run build:css && electron-builder",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -20,58 +14,9 @@
     "ai",
     "testing",
     "playwright",
-    "electron"
+    "web"
   ],
   "license": "MIT",
-  "build": {
-    "appId": "com.prism.app",
-    "productName": "Prism",
-    "icon": "build/icon.icns",
-    "mac": {
-      "icon": "build/icon.icns",
-      "category": "public.app-category.developer-tools",
-      "target": [
-        "dmg",
-        "zip"
-      ]
-    },
-    "win": {
-      "icon": "build/icon.png",
-      "target": [
-        "nsis",
-        "zip"
-      ]
-    },
-    "linux": {
-      "icon": "build/icon.png",
-      "target": [
-        "AppImage",
-        "deb"
-      ]
-    },
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "electron/**/*",
-      "server/**/*",
-      "src/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "data",
-        "to": "data",
-        "filter": ["**/*.md"]
-      }
-    ]
-  },
-  "devDependencies": {
-    "concurrently": "^8.0.0",
-    "electron": "^28.0.0",
-    "electron-builder": "^24.0.0",
-    "electron-reload": "^2.0.0-alpha.1"
-  },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.2",
     "better-sqlite3": "^9.4.3",

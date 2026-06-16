@@ -12,7 +12,6 @@
 ## 项目结构
 ```
 scout/
-├── electron/        # Electron 主进程
 ├── server/          # 后端服务
 │   ├── ai/          # LLM 调用
 │   ├── executor/    # 用例执行

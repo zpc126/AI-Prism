@@ -1,28 +1,24 @@
-// input: 评估集用例
+// input: 评估集用例、Web 服务地址
 // output: 执行日志（通过 ws 推送）
 // position: server/evaluation/runner.js
 
-const { _electron: electron } = require('playwright');
+const { chromium } = require('playwright');
 const path = require('path');
+const fs = require('fs');
 const ws = require('./ws');
 const storage = require('./storage');
-const { app } = require('electron');
 
 let running = false;
 
-// 获取 Electron 可执行文件路径
-function getElectronPath() {
-  return path.join(__dirname, '../../node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
-}
-
-function getAppPath() {
-  return path.join(__dirname, '../..');
+function getBaseUrl() {
+  const host = process.env.HOST && process.env.HOST !== '0.0.0.0' ? process.env.HOST : '127.0.0.1';
+  const port = process.env.PORT || 3000;
+  return process.env.PRISM_WEB_URL || `http://${host}:${port}`;
 }
 
 // 生成截图保存路径
 function getScreenshotDir(runId) {
-  const dir = path.join(app.getPath('userData'), 'eval-screenshots', runId);
-  const fs = require('fs');
+  const dir = path.join(__dirname, '../../data/eval-screenshots', runId);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -34,26 +30,22 @@ async function sleep(ms) {
 /**
  * 运行单个评估用例
  */
-async function runCase(electronApp, caseItem, runId, screenshotDir, index, total) {
-  const window = await electronApp.firstWindow();
+async function runCase(page, caseItem, runId, screenshotDir, index, total, baseUrl) {
   ws.log(runId, 'info', `[${index + 1}/${total}] ${caseItem.name}`);
 
   // 1. 回到首页
-  await window.evaluate(() => {
-    const backBtn = document.querySelector('#btn-back');
-    if (backBtn) backBtn.click();
-  });
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await sleep(1000);
 
   // 2. 输入需求
   ws.log(runId, 'info', `输入需求: ${caseItem.input.substring(0, 50)}...`);
-  await window.fill('#requirement-input', caseItem.input);
-  await window.screenshot({ path: path.join(screenshotDir, `${index + 1}-input.png`) });
+  await page.fill('#requirement-input', caseItem.input);
+  await page.screenshot({ path: path.join(screenshotDir, `${index + 1}-input.png`) });
   await sleep(500);
 
   // 3. 点击开始
   ws.log(runId, 'info', '点击「开始」');
-  await window.click('#btn-start');
+  await page.click('#btn-start');
   await sleep(2000);
 
   // 4. 监控生成过程
@@ -63,7 +55,7 @@ async function runCase(electronApp, caseItem, runId, screenshotDir, index, total
   const timeout = 120000; // 2 分钟
 
   while (Date.now() - startTime < timeout) {
-    const state = await window.evaluate(() => {
+    const state = await page.evaluate(() => {
       const thinking = document.querySelector('.thinking-step.active');
       const cases = document.querySelectorAll('.node-leaf');
       const danmaku = document.querySelector('#danmaku');
@@ -90,14 +82,14 @@ async function runCase(electronApp, caseItem, runId, screenshotDir, index, total
     if (state.caseCount > caseCount) {
       ws.log(runId, 'success', `生成 ${state.caseCount} 条用例`);
       caseCount = state.caseCount;
-      await window.screenshot({ path: path.join(screenshotDir, `${index + 1}-progress.png`) });
+      await page.screenshot({ path: path.join(screenshotDir, `${index + 1}-progress.png`) });
     }
 
     // 检查是否完成（画布可见且不再有新用例）
     if (state.canvasVisible && state.caseCount > 0) {
       const stableStart = Date.now();
       while (Date.now() - stableStart < 5000) {
-        const newCount = await window.evaluate(() => document.querySelectorAll('.node-leaf').length);
+        const newCount = await page.evaluate(() => document.querySelectorAll('.node-leaf').length);
         if (newCount !== state.caseCount) break;
         await sleep(1000);
       }
@@ -108,9 +100,9 @@ async function runCase(electronApp, caseItem, runId, screenshotDir, index, total
   }
 
   // 5. 收集结果
-  await window.screenshot({ path: path.join(screenshotDir, `${index + 1}-result.png`) });
+  await page.screenshot({ path: path.join(screenshotDir, `${index + 1}-result.png`) });
   
-  const result = await window.evaluate(() => {
+  const result = await page.evaluate(() => {
     const nodes = document.querySelectorAll('.node-leaf');
     const cases = [];
     nodes.forEach(n => {
@@ -139,6 +131,7 @@ async function runEvaluation(runId, datasetId) {
 
   running = true;
   const startTime = Date.now();
+  let browser = null;
 
   try {
     // 加载评估集
@@ -155,24 +148,20 @@ async function runEvaluation(runId, datasetId) {
     const screenshotDir = getScreenshotDir(runId);
     ws.log(runId, 'info', `截图目录: ${screenshotDir}`);
 
-    // 启动 Prism
-    ws.log(runId, 'info', '启动 Prism...');
-    const electronApp = await electron.launch({
-      executablePath: getElectronPath(),
-      args: [getAppPath()],
-      timeout: 30000
-    });
-
-    const window = await electronApp.firstWindow();
-    await window.waitForLoadState('domcontentloaded');
-    ws.log(runId, 'success', 'Prism 已启动');
+    // 启动 Web 评估浏览器
+    const baseUrl = getBaseUrl();
+    ws.log(runId, 'info', `打开 Prism Web: ${baseUrl}`);
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    ws.log(runId, 'success', 'Prism Web 已打开');
     await sleep(2000);
 
     // 逐个运行用例
     const results = [];
     for (let i = 0; i < cases.length; i++) {
       ws.progress(runId, i + 1, cases.length, cases[i].name);
-      const result = await runCase(electronApp, cases[i], runId, screenshotDir, i, cases.length);
+      const result = await runCase(page, cases[i], runId, screenshotDir, i, cases.length, baseUrl);
       results.push({
         id: cases[i].id,
         name: cases[i].name,
@@ -182,9 +171,10 @@ async function runEvaluation(runId, datasetId) {
       });
     }
 
-    // 关闭 Prism
-    await electronApp.close();
-    ws.log(runId, 'info', 'Prism 已关闭');
+    // 关闭浏览器
+    await browser.close();
+    browser = null;
+    ws.log(runId, 'info', '评估浏览器已关闭');
 
     // 计算指标
     const metrics = results.map(r => {
@@ -243,6 +233,7 @@ async function runEvaluation(runId, datasetId) {
 
     return report;
   } catch (err) {
+    if (browser) await browser.close().catch(() => {});
     storage.updateRun(runId, { status: 'error' });
     ws.error(runId, err);
     ws.log(runId, 'error', `评估失败: ${err.message}`);

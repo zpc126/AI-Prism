@@ -7,7 +7,7 @@
 ```
 server/
 ├── index.js              # Web 服务入口、静态资源、图片请求、局域网监听与路由注册
-├── config.js             # 隔离 Web/Electron 凭据的配置中心
+├── config.js             # Web 配置中心
 ├── ai/                   # AI 能力
 │   ├── generate.js       # 用例生成、Base URL 规范化与流式响应校验
 │   └── README.md
@@ -42,6 +42,12 @@ server/
 │   ├── auto-runner.js    # 自动化执行器
 │   ├── enhanced-runner.js # 增强执行器
 │   ├── batch-executor.js # 批量执行器
+│   └── README.md
+├── evaluation/           # Web E2E 评估
+│   ├── runner.js         # Chromium 评估执行器
+│   ├── storage.js        # 评估数据存储
+│   ├── routes.js         # API 路由
+│   ├── ws.js             # 实时日志推送
 │   └── README.md
 ├── pi/                   # PI Agent 集成
 │   ├── pi-agent.js       # PI Agent 核心服务
