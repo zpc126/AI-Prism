@@ -1549,6 +1549,15 @@ function exportCases() {
         <h3 class="text-base font-medium text-zinc-800">导出用例</h3>
       </div>
       <div class="p-5 space-y-3">
+        <button class="export-option w-full flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-50 transition-colors" data-format="zentao">
+          <div class="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
+            <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 10h16M4 14h10M4 18h10"/></svg>
+          </div>
+          <div class="text-left">
+            <p class="text-sm font-medium text-zinc-800">禅道导入 CSV</p>
+            <p class="text-xs text-zinc-400">模块、标题、步骤、预期、优先级</p>
+          </div>
+        </button>
         <button class="export-option w-full flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-50 transition-colors" data-format="excel">
           <div class="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center">
             <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
@@ -1593,7 +1602,9 @@ function exportCases() {
       const format = btn.dataset.format;
       modal.remove();
       
-      if (format === 'excel') {
+      if (format === 'zentao') {
+        exportToZentaoCsv();
+      } else if (format === 'excel') {
         exportToExcel();
       } else if (format === 'csv') {
         exportToCsv();
@@ -1602,6 +1613,32 @@ function exportCases() {
       }
     });
   });
+}
+
+function addCaseDownloadMessage(totalCases) {
+  const chat = $('#island-chat');
+  const count = totalCases || getAllCases().length;
+  if (!chat || !count) return;
+
+  chat.querySelector('.case-download-card')?.remove();
+
+  const div = document.createElement('div');
+  div.className = 'island-message case-download-card';
+  div.innerHTML = `
+    <div class="flex gap-2">
+      <div class="w-6 h-6 rounded-full overflow-hidden shrink-0">
+        <span class="prism-avatar" aria-hidden="true"></span>
+      </div>
+      <div class="bg-amber-50 border border-amber-100 rounded-2xl rounded-tl-md px-3.5 py-3 text-xs text-amber-800 max-w-[86%] leading-relaxed">
+        <div class="font-medium">用例文档已准备好</div>
+        <div class="mt-1 text-amber-700/80">共 ${count} 条，可下载为禅道导入 CSV。</div>
+        <button class="download-zentao-cases mt-2 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium">下载禅道 CSV</button>
+      </div>
+    </div>`;
+
+  chat.appendChild(div);
+  div.querySelector('.download-zentao-cases')?.addEventListener('click', exportToZentaoCsv);
+  chat.scrollTop = chat.scrollHeight;
 }
 
 // ========== 导出 XMind ==========
@@ -1757,6 +1794,74 @@ function escapeXml(str) {
 }
 
 // ========== 导出 Excel ==========
+function csvCell(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function downloadTextFile(content, filename, type = 'text/csv;charset=utf-8;') {
+  const blob = new Blob(['\ufeff' + content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function priorityToZentao(priority) {
+  const normalized = String(priority || 'P2').toUpperCase();
+  if (normalized === 'P0') return '1';
+  if (normalized === 'P1') return '2';
+  if (normalized === 'P2') return '3';
+  return '4';
+}
+
+function exportToZentaoCsv() {
+  const allCases = getAllCases();
+  if (!allCases.length) {
+    addIslandMessage('system', '没有可导出的用例');
+    return;
+  }
+
+  try {
+    const rows = [[
+      '所属模块',
+      '用例标题',
+      '前置条件',
+      '步骤',
+      '预期',
+      '关键词',
+      '优先级',
+      '用例类型',
+      '适用阶段'
+    ]];
+
+    allCases.forEach(item => {
+      const steps = (item.steps || []).map((step, index) => `${index + 1}. ${step}`).join('\n');
+      const tags = [item.productName, item.category, item.source].filter(Boolean).join(' ');
+      rows.push([
+        item.moduleName || item.category || '未分类',
+        item.title || '',
+        item.source || '',
+        steps,
+        item.expected || '',
+        tags,
+        priorityToZentao(item.priority),
+        '功能测试',
+        '功能测试阶段'
+      ]);
+    });
+
+    const csvContent = rows.map(row => row.map(csvCell).join(',')).join('\n');
+    const name = (getMindMapRootTitle() || 'prism-cases').replace(/[\\/:*?"<>|]/g, '_');
+    downloadTextFile(csvContent, `${name}-zentao-${Date.now()}.csv`);
+    addIslandMessage('system', '已下载禅道导入 CSV');
+  } catch (error) {
+    console.error('导出禅道 CSV 失败:', error);
+    addIslandMessage('system', '导出失败: ' + error.message);
+  }
+}
+
 function exportToExcel() {
   if (!state.categories || state.categories.length === 0) {
     addIslandMessage('system', '没有可导出的用例');
@@ -2082,6 +2187,7 @@ async function startAnalysis() {
       
       // 显示画布对话条
       showCanvasChat();
+      addCaseDownloadMessage(totalCases);
     }
     
   } catch (error) {
@@ -3290,6 +3396,8 @@ async function startBugRegression() {
       state.canvas.fitToView();
       await scoutSay(`好了，帮你生成了 ${totalCases} 条回归用例，你看看`, 0);
       saveSession(totalCases);
+      showCanvasChat();
+      addCaseDownloadMessage(totalCases);
     }
     
   } catch (error) {
