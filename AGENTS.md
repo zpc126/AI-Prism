@@ -11,7 +11,7 @@
 
 ## 项目结构
 ```
-scout/
+AI-Prism/
 ├── server/          # 后端服务
 │   ├── ai/          # LLM 调用
 │   ├── executor/    # 用例执行

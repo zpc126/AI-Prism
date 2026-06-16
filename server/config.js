@@ -1,6 +1,6 @@
 // input: Web 配置文件路径、环境变量
 // output: 当前激活的 LLM 提供商配置
-// position: 服务器端 Web 配置中心
+// position: 服务器端 Web-only 配置中心
 
 const fs = require('fs');
 const path = require('path');

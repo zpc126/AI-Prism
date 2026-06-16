@@ -53,7 +53,7 @@ src/styles/tailwind.js
 # Backup files
 *.bak
 
-# Scout config
+# Prism local config
 .scout
 
 # Test reports

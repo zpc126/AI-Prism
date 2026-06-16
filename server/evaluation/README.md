@@ -1,6 +1,6 @@
 # server/evaluation/
 
-Prism 评估模块。管理评估集、运行评估、实时监控。
+Prism Web 评估模块。管理评估集、运行评估、实时监控。
 
 ## 文件
 

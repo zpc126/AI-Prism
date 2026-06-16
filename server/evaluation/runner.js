@@ -1,5 +1,5 @@
 // input: 评估集用例、Web 服务地址
-// output: 执行日志（通过 ws 推送）
+// output: Web E2E 执行日志（通过 ws 推送）
 // position: server/evaluation/runner.js
 
 const { chromium } = require('playwright');

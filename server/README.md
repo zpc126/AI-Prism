@@ -7,7 +7,7 @@
 ```
 server/
 ├── index.js              # Web 服务入口、静态资源、图片请求、局域网监听与路由注册
-├── config.js             # Web 配置中心
+├── config.js             # Web-only 配置中心
 ├── ai/                   # AI 能力
 │   ├── generate.js       # 用例生成、Base URL 规范化与流式响应校验
 │   └── README.md

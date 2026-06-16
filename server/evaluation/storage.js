@@ -1,5 +1,5 @@
 // input: better-sqlite3
-// output: 评估集 + 评估记录 CRUD
+// output: Web 评估集 + 评估记录 CRUD
 // position: server/evaluation/storage.js
 
 const Database = require('better-sqlite3');
