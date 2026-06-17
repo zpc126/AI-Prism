@@ -1210,6 +1210,7 @@ const deviceMirrorState = {
   running: false,
   loading: false,
   frameCount: 0,
+  mode: 'snapshot',
 };
 
 const DEVICE_MIRROR_MIN_DELAY = 120;
@@ -1219,7 +1220,11 @@ function initDeviceMirrorIsland() {
   $('#btn-device-mirror-collapse')?.addEventListener('click', () => setDeviceMirrorExpanded(false));
   $('#btn-device-mirror-close')?.addEventListener('click', closeDeviceMirrorIsland);
   $('#btn-device-mirror-refresh')?.addEventListener('click', () => {
+    showSnapshotMirrorStatus('手动刷新网页内预览');
     clearDeviceMirrorTimer();
+    if (!deviceMirrorState.running) {
+      deviceMirrorState.running = true;
+    }
     refreshDeviceMirrorFrame(true);
   });
   $('#device-mirror-collapsed')?.addEventListener('click', (event) => {
@@ -1240,7 +1245,21 @@ async function openDeviceMirrorIsland() {
   if (!island) return;
   island.classList.remove('hidden');
   setDeviceMirrorExpanded(true);
-  startDeviceMirrorPolling();
+
+  try {
+    const response = await fetch(`${API_BASE}/device/scrcpy/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxSize: 1024, maxFps: 60, bitRate: '8M' })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'scrcpy 启动失败');
+    showScrcpyMirrorStatus(data.status);
+  } catch (error) {
+    console.warn('scrcpy 投屏启动失败，降级到截图模式:', error.message);
+    showSnapshotMirrorStatus(error.message);
+    startDeviceMirrorPolling();
+  }
 }
 
 function setDeviceMirrorExpanded(expanded) {
@@ -1251,7 +1270,48 @@ function setDeviceMirrorExpanded(expanded) {
 
 function closeDeviceMirrorIsland() {
   stopDeviceMirrorPolling();
+  stopScrcpyMirror();
   $('#device-mirror-island')?.classList.add('hidden');
+}
+
+function showScrcpyMirrorStatus(status = {}) {
+  deviceMirrorState.mode = 'scrcpy';
+  stopDeviceMirrorPolling();
+  $('#device-mirror-title').textContent = 'scrcpy 低延迟投屏';
+  $('#device-mirror-subtitle').textContent = status.reused ? '低延迟窗口已在运行' : '低延迟窗口已打开';
+  $('#device-mirror-detail').textContent = 'scrcpy 视频流模式 · 延迟远低于 ADB 截图';
+  $('#device-mirror-status').textContent = `已连接 ${status.device?.model || 'Android 真机'}`;
+  const empty = $('#device-mirror-empty');
+  const img = $('#device-mirror-img');
+  if (img) img.removeAttribute('src');
+  empty?.classList.remove('hidden');
+  if (empty) {
+    empty.innerHTML = 'scrcpy 低延迟窗口已打开<br><span class="text-[11px] text-zinc-600">网页内预览可用刷新按钮切回截图模式</span>';
+  }
+}
+
+function showSnapshotMirrorStatus(reason = '') {
+  deviceMirrorState.mode = 'snapshot';
+  $('#device-mirror-title').textContent = 'Android 投屏';
+  $('#device-mirror-subtitle').textContent = 'ADB 截图预览模式';
+  $('#device-mirror-detail').textContent = reason
+    ? `scrcpy 不可用，已降级截图：${reason}`
+    : '通过 ADB 截图实时刷新';
+  const empty = $('#device-mirror-empty');
+  if (empty) {
+    empty.textContent = '正在获取手机画面...';
+  }
+}
+
+async function stopScrcpyMirror() {
+  if (deviceMirrorState.mode !== 'scrcpy') return;
+  try {
+    await fetch(`${API_BASE}/device/scrcpy/stop`, { method: 'POST' });
+  } catch (error) {
+    console.warn('停止 scrcpy 失败:', error.message);
+  } finally {
+    deviceMirrorState.mode = 'snapshot';
+  }
 }
 
 function startDeviceMirrorPolling() {

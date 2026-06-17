@@ -4,6 +4,7 @@
 
 const express = require('express');
 const { getDeviceStatus, connectDevice, pairDevice, screenshotBufferAsync, compressedScreenshotBuffer } = require('./adb-device');
+const { getScrcpyStatus, startScrcpyMirror, stopScrcpyMirror } = require('./scrcpy-mirror');
 
 const router = express.Router();
 
@@ -53,6 +54,22 @@ router.get('/adb/screenshot', async (_req, res) => {
   } catch (error) {
     res.status(400).json({ success: false, error: error.message, status: getDeviceStatus() });
   }
+});
+
+router.get('/scrcpy/status', (_req, res) => {
+  res.json({ success: true, status: getScrcpyStatus() });
+});
+
+router.post('/scrcpy/start', (req, res) => {
+  try {
+    res.json({ success: true, status: startScrcpyMirror(req.body || {}) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message, status: getScrcpyStatus() });
+  }
+});
+
+router.post('/scrcpy/stop', (_req, res) => {
+  res.json({ success: true, status: stopScrcpyMirror() });
 });
 
 module.exports = router;

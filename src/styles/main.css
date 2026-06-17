@@ -2294,6 +2294,10 @@ body {
 }
 
 /* ========== Android 投屏灵动岛 ========== */
+#device-mirror-island {
+  z-index: 9999 !important;
+}
+
 .device-mirror-pill {
   width: 300px;
   min-height: 56px;

@@ -568,12 +568,12 @@
             <div class="flex gap-2 mt-2">
               <input id="adb-wireless-address" type="text" placeholder="连接地址，如 192.168.1.20:5555" class="flex-1 min-w-0 px-2.5 py-2 text-xs border border-blue-100 rounded-lg bg-white focus:outline-none focus:border-blue-300">
               <button id="btn-adb-connect" type="button" class="px-3 py-2 text-xs font-medium text-blue-700 bg-white border border-blue-100 rounded-lg hover:bg-blue-50">连接</button>
-              <button id="btn-adb-mirror" type="button" class="px-3 py-2 text-xs font-medium text-blue-700 bg-white border border-blue-100 rounded-lg hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed" disabled>投屏</button>
             </div>
             <div class="flex gap-2 mt-2">
               <input id="adb-pair-address" type="text" placeholder="首次配对地址" class="flex-1 min-w-0 px-2.5 py-2 text-xs border border-blue-100 rounded-lg bg-white focus:outline-none focus:border-blue-300">
               <input id="adb-pair-code" type="text" inputmode="numeric" maxlength="6" placeholder="6位配对码" class="w-24 px-2.5 py-2 text-xs border border-blue-100 rounded-lg bg-white focus:outline-none focus:border-blue-300">
               <button id="btn-adb-pair" type="button" class="px-3 py-2 text-xs font-medium text-blue-700 bg-white border border-blue-100 rounded-lg hover:bg-blue-50">配对</button>
+              <button id="btn-adb-mirror" type="button" class="px-3 py-2 text-xs font-medium text-blue-700 bg-white border border-blue-100 rounded-lg hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed" disabled>投屏</button>
             </div>
           </div>
         </div>
@@ -751,7 +751,7 @@
   </div>
 
   <!-- ========== ADB 手机投屏灵动岛 ========== -->
-  <div id="device-mirror-island" class="fixed bottom-6 right-6 z-[110] hidden">
+  <div id="device-mirror-island" class="fixed bottom-6 right-6 z-[300] hidden">
     <div id="device-mirror-collapsed" class="device-mirror-pill">
       <div class="device-mirror-dot"></div>
       <div class="min-w-0 flex-1">
