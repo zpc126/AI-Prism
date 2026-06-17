@@ -152,7 +152,7 @@
             </div>
             
             <div class="flex items-center gap-2">
-              <button id="btn-analysis-history" class="analysis-history-entry hidden" type="button">
+              <button id="btn-analysis-history" class="analysis-history-entry" type="button">
                 历史报告
               </button>
               <button id="btn-start" class="btn-start" disabled>
@@ -568,6 +568,7 @@
             <div class="flex gap-2 mt-2">
               <input id="adb-wireless-address" type="text" placeholder="连接地址，如 192.168.1.20:5555" class="flex-1 min-w-0 px-2.5 py-2 text-xs border border-blue-100 rounded-lg bg-white focus:outline-none focus:border-blue-300">
               <button id="btn-adb-connect" type="button" class="px-3 py-2 text-xs font-medium text-blue-700 bg-white border border-blue-100 rounded-lg hover:bg-blue-50">连接</button>
+              <button id="btn-adb-mirror" type="button" class="px-3 py-2 text-xs font-medium text-blue-700 bg-white border border-blue-100 rounded-lg hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed" disabled>投屏</button>
             </div>
             <div class="flex gap-2 mt-2">
               <input id="adb-pair-address" type="text" placeholder="首次配对地址" class="flex-1 min-w-0 px-2.5 py-2 text-xs border border-blue-100 rounded-lg bg-white focus:outline-none focus:border-blue-300">
@@ -744,6 +745,49 @@
             <button id="btn-exec-view-report" class="hidden text-xs font-medium text-emerald-600 hover:text-emerald-700">查看报告</button>
             <span id="exec-island-expanded-count" class="text-xs font-medium text-stone-600">0/0</span>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== ADB 手机投屏灵动岛 ========== -->
+  <div id="device-mirror-island" class="fixed bottom-6 right-6 z-[110] hidden">
+    <div id="device-mirror-collapsed" class="device-mirror-pill">
+      <div class="device-mirror-dot"></div>
+      <div class="min-w-0 flex-1">
+        <div id="device-mirror-title" class="text-xs font-medium text-white truncate">Android 投屏</div>
+        <div id="device-mirror-subtitle" class="text-[11px] text-zinc-400 truncate">等待画面...</div>
+      </div>
+      <button id="btn-device-mirror-expand" class="island-expand-btn" title="展开投屏">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/></svg>
+      </button>
+      <button id="btn-device-mirror-close" class="island-close-btn" title="关闭投屏">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="device-mirror-expanded" class="device-mirror-expanded hidden">
+      <div class="island-expanded-header">
+        <div>
+          <div class="island-title">Android 真机投屏</div>
+          <div id="device-mirror-detail" class="text-[11px] text-zinc-500 mt-0.5">通过 ADB 截图实时刷新</div>
+        </div>
+        <div class="flex items-center gap-1">
+          <button id="btn-device-mirror-refresh" class="island-collapse-btn" title="刷新">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M20.015 4.356v4.992m0 0h-4.992m4.992 0l-3.181-3.183a8.25 8.25 0 00-13.803 3.7"/></svg>
+          </button>
+          <button id="btn-device-mirror-collapse" class="island-collapse-btn" title="收起">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 15l7-7 7 7"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="device-mirror-screen-wrap">
+        <img id="device-mirror-img" class="device-mirror-screen" alt="Android 手机投屏">
+        <div id="device-mirror-empty" class="device-mirror-empty">正在获取手机画面...</div>
+      </div>
+      <div class="island-expanded-footer">
+        <div class="flex items-center justify-between">
+          <span id="device-mirror-status" class="text-xs text-zinc-500">实时刷新中</span>
+          <span class="text-[11px] text-zinc-600">ADB screencap</span>
         </div>
       </div>
     </div>

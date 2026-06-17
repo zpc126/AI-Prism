@@ -179,7 +179,9 @@ async function copyAnalysisReportUrl(report, button) {
 function updateAnalysisHistoryEntry() {
   const button = $('#btn-analysis-history');
   if (!button) return;
+  const count = getAnalysisHistory().length;
   button.classList.toggle('hidden', state.activeTab !== 'analyze');
+  button.textContent = count ? `历史报告 ${count}` : '历史报告';
 }
 
 function getChatHistory() {
@@ -1048,6 +1050,7 @@ function initRunModal() {
   const btnConfirm = $('#btn-run-confirm');
   const btnAdbConnect = $('#btn-adb-connect');
   const btnAdbPair = $('#btn-adb-pair');
+  const btnAdbMirror = $('#btn-adb-mirror');
   
   // 取消
   btnCancel?.addEventListener('click', () => {
@@ -1062,6 +1065,8 @@ function initRunModal() {
 
   btnAdbConnect?.addEventListener('click', connectWirelessAdb);
   btnAdbPair?.addEventListener('click', pairWirelessAdb);
+  btnAdbMirror?.addEventListener('click', openDeviceMirrorIsland);
+  initDeviceMirrorIsland();
   
   // 点击背景关闭
   modal?.addEventListener('click', (e) => {
@@ -1106,6 +1111,7 @@ async function refreshAdbDeviceStatus() {
   const statusText = $('#adb-device-status');
   const detailText = $('#adb-device-detail');
   const dot = $('#adb-device-dot');
+  const mirrorButton = $('#btn-adb-mirror');
   if (!statusText) return null;
   try {
     const response = await fetch(`${API_BASE}/device/adb`);
@@ -1115,16 +1121,25 @@ async function refreshAdbDeviceStatus() {
       statusText.textContent = `Android 已连接${status.active?.model ? ` · ${status.active.model}` : ''}`;
       detailText.textContent = status.active?.serial || '设备可用于手机端自动测试';
       dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0';
+      if (mirrorButton) {
+        mirrorButton.disabled = false;
+        mirrorButton.textContent = '投屏';
+      }
     } else {
       statusText.textContent = status.available ? '未连接 Android 设备' : 'ADB 不可用';
       detailText.textContent = status.error || '请插入 USB 数据线，或输入无线 ADB 地址';
       dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0';
+      if (mirrorButton) {
+        mirrorButton.disabled = true;
+        mirrorButton.textContent = '投屏';
+      }
     }
     return status;
   } catch (error) {
     statusText.textContent = '设备状态检查失败';
     detailText.textContent = error.message;
     dot.className = 'w-2.5 h-2.5 rounded-full bg-red-400 shrink-0';
+    if (mirrorButton) mirrorButton.disabled = true;
     return null;
   }
 }
@@ -1187,6 +1202,89 @@ async function pairWirelessAdb() {
     button.disabled = false;
     button.textContent = '配对';
   }
+}
+
+const deviceMirrorState = {
+  timer: null,
+  expanded: false,
+  running: false,
+};
+
+function initDeviceMirrorIsland() {
+  $('#btn-device-mirror-expand')?.addEventListener('click', () => setDeviceMirrorExpanded(true));
+  $('#btn-device-mirror-collapse')?.addEventListener('click', () => setDeviceMirrorExpanded(false));
+  $('#btn-device-mirror-close')?.addEventListener('click', closeDeviceMirrorIsland);
+  $('#btn-device-mirror-refresh')?.addEventListener('click', () => refreshDeviceMirrorFrame(true));
+  $('#device-mirror-collapsed')?.addEventListener('click', (event) => {
+    if (event.target.closest('button')) return;
+    setDeviceMirrorExpanded(true);
+  });
+}
+
+async function openDeviceMirrorIsland() {
+  const status = await refreshAdbDeviceStatus();
+  if (!status?.connected) {
+    const detail = $('#adb-device-detail');
+    if (detail) detail.textContent = '请先连接 Android 设备，再打开投屏';
+    return;
+  }
+
+  const island = $('#device-mirror-island');
+  if (!island) return;
+  island.classList.remove('hidden');
+  setDeviceMirrorExpanded(true);
+  startDeviceMirrorPolling();
+}
+
+function setDeviceMirrorExpanded(expanded) {
+  deviceMirrorState.expanded = expanded;
+  $('#device-mirror-collapsed')?.classList.toggle('hidden', expanded);
+  $('#device-mirror-expanded')?.classList.toggle('hidden', !expanded);
+}
+
+function closeDeviceMirrorIsland() {
+  stopDeviceMirrorPolling();
+  $('#device-mirror-island')?.classList.add('hidden');
+}
+
+function startDeviceMirrorPolling() {
+  if (deviceMirrorState.running) return;
+  deviceMirrorState.running = true;
+  refreshDeviceMirrorFrame(true);
+  deviceMirrorState.timer = setInterval(() => refreshDeviceMirrorFrame(false), 1200);
+}
+
+function stopDeviceMirrorPolling() {
+  deviceMirrorState.running = false;
+  if (deviceMirrorState.timer) {
+    clearInterval(deviceMirrorState.timer);
+    deviceMirrorState.timer = null;
+  }
+}
+
+function refreshDeviceMirrorFrame(manual = false) {
+  const img = $('#device-mirror-img');
+  const empty = $('#device-mirror-empty');
+  const status = $('#device-mirror-status');
+  const subtitle = $('#device-mirror-subtitle');
+  if (!img) return;
+
+  const startedAt = Date.now();
+  if (status) status.textContent = manual ? '正在刷新画面...' : '实时刷新中';
+  img.onload = () => {
+    empty?.classList.add('hidden');
+    const cost = Date.now() - startedAt;
+    if (status) status.textContent = `已刷新 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+    if (subtitle) subtitle.textContent = `画面同步中 · ${cost}ms`;
+  };
+  img.onerror = () => {
+    empty?.classList.remove('hidden');
+    if (empty) empty.textContent = '获取画面失败，请确认 ADB 已连接';
+    if (status) status.textContent = '投屏失败';
+    if (subtitle) subtitle.textContent = 'ADB 截图失败';
+    stopDeviceMirrorPolling();
+  };
+  img.src = `${API_BASE}/device/adb/screenshot?t=${Date.now()}`;
 }
 
 // ========== 执行用例 ==========

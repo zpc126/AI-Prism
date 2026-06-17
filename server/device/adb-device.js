@@ -207,6 +207,10 @@ function screenshot(label = 'mobile') {
   return { success: true, action: 'screenshot', filepath, filename: path.basename(filepath), device: 'mobile', deviceLabel: 'Android 真机' };
 }
 
+function screenshotBuffer() {
+  return adbForDevice(['exec-out', 'screencap', '-p'], { binary: true, timeout: 15000 });
+}
+
 function scroll(direction = 'down', amount = 500) {
   const size = adbForDevice(['shell', 'wm', 'size']);
   const match = size.match(/(\d+)x(\d+)/);
@@ -239,6 +243,7 @@ module.exports = {
   navigate,
   getSnapshot,
   screenshot,
+  screenshotBuffer,
   scroll,
   waitForElement,
 };

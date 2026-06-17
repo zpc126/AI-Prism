@@ -2293,6 +2293,71 @@ body {
   color: #ef4444;
 }
 
+/* ========== Android 投屏灵动岛 ========== */
+.device-mirror-pill {
+  width: 300px;
+  min-height: 56px;
+  background: #18181b;
+  border-radius: 24px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  animation: island-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.device-mirror-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.12);
+  flex-shrink: 0;
+}
+
+.device-mirror-expanded {
+  width: 360px;
+  background: #18181b;
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  animation: island-expand 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.device-mirror-screen-wrap {
+  position: relative;
+  min-height: 420px;
+  max-height: 68vh;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at top, rgba(63, 63, 70, 0.9), #09090b 70%);
+}
+
+.device-mirror-screen {
+  max-width: 100%;
+  max-height: 64vh;
+  border-radius: 18px;
+  background: #09090b;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  object-fit: contain;
+}
+
+.device-mirror-empty {
+  position: absolute;
+  inset: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  color: #71717a;
+  font-size: 12px;
+  pointer-events: none;
+}
+
 /* 自动化脚本工作台 */
 .script-workspace {
   --script-accent: #171717;
