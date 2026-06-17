@@ -3499,14 +3499,30 @@ function renderAnalysisReportBody({ report, risks, questions, modules, testScope
       </div>
     </div>
   `).join('') : renderSection('模块拆解', '<p class="text-xs text-zinc-400">模型未识别到明确模块。</p>');
-  const risksHtml = risks.length ? risks.map(c => `
-    <div class="p-3 border border-zinc-100 rounded-xl bg-white">
+  const categoryStyles = {
+    '边界未定义': { dot: 'bg-amber-500', tag: 'bg-amber-50 text-amber-700', border: 'border-l-amber-400' },
+    '逻辑漏洞': { dot: 'bg-red-500', tag: 'bg-red-50 text-red-600', border: 'border-l-red-400' },
+    '歧义描述': { dot: 'bg-orange-500', tag: 'bg-orange-50 text-orange-600', border: 'border-l-orange-400' },
+    '遗漏场景': { dot: 'bg-purple-500', tag: 'bg-purple-50 text-purple-600', border: 'border-l-purple-400' },
+    '数据风险': { dot: 'bg-cyan-500', tag: 'bg-cyan-50 text-cyan-600', border: 'border-l-cyan-400' },
+    '技术风险': { dot: 'bg-blue-500', tag: 'bg-blue-50 text-blue-600', border: 'border-l-blue-400' },
+    '体验问题': { dot: 'bg-green-500', tag: 'bg-green-50 text-green-600', border: 'border-l-green-400' }
+  };
+  const priorityTagClass = priority => {
+    if (priority === 'P0' || priority === 'P1') return 'bg-red-50 text-red-500';
+    if (priority === 'P2') return 'bg-amber-50 text-amber-600';
+    return 'bg-zinc-100 text-zinc-500';
+  };
+  const risksHtml = risks.length ? risks.map(c => {
+    const style = categoryStyles[c.category] || { dot: 'bg-zinc-400', tag: 'bg-zinc-100 text-zinc-500', border: 'border-l-zinc-300' };
+    return `
+    <div class="p-3 border border-zinc-100 border-l-4 ${style.border} rounded-xl bg-white">
       <div class="flex items-start gap-2">
-        <span class="w-1.5 h-1.5 rounded-full bg-zinc-400 mt-2 shrink-0"></span>
+        <span class="w-1.5 h-1.5 rounded-full ${style.dot} mt-2 shrink-0"></span>
         <div class="flex-1">
           <div class="flex items-center gap-2 flex-wrap">
-            <span class="text-[10px] px-1.5 py-0.5 bg-zinc-100 text-zinc-500 rounded">${escapeHtml(c.category || '风险')}</span>
-            <span class="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-500 rounded">${escapeHtml(c.priority || 'P1')}</span>
+            <span class="text-[10px] px-1.5 py-0.5 ${style.tag} rounded">${escapeHtml(c.category || '风险')}</span>
+            <span class="text-[10px] px-1.5 py-0.5 ${priorityTagClass(c.priority)} rounded">${escapeHtml(c.priority || 'P1')}</span>
             <span class="text-sm text-zinc-800 font-medium">${escapeHtml(c.title || '')}</span>
           </div>
           ${c.steps?.[0] ? `<p class="text-xs text-zinc-500 mt-1.5 leading-relaxed">${escapeHtml(c.steps[0])}</p>` : ''}
@@ -3515,7 +3531,8 @@ function renderAnalysisReportBody({ report, risks, questions, modules, testScope
         </div>
       </div>
     </div>
-  `).join('') : renderSection('风险问题', '<p class="text-xs text-zinc-400">暂未识别到高风险问题。</p>');
+  `;
+  }).join('') : renderSection('风险问题', '<p class="text-xs text-zinc-400">暂未识别到高风险问题。</p>');
   return `
     ${report.summary ? `<div class="p-4 rounded-xl bg-zinc-900 text-white"><div class="text-[11px] text-zinc-300 mb-1">需求摘要</div><p class="text-sm leading-relaxed">${escapeHtml(report.summary)}</p></div>` : ''}
     ${modulesHtml}
