@@ -2,7 +2,7 @@
 // output: Android 真机连接状态、点击输入滑动截图和界面快照
 // position: Web 与 Android 真机跨端自动化的 ADB 适配层
 
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -211,6 +211,39 @@ function screenshotBuffer() {
   return adbForDevice(['exec-out', 'screencap', '-p'], { binary: true, timeout: 15000 });
 }
 
+function runAdbAsync(args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(resolveAdbPath(), args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const chunks = [];
+    const errorChunks = [];
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('ADB 截图超时'));
+    }, options.timeout || 8000);
+
+    child.stdout.on('data', chunk => chunks.push(chunk));
+    child.stderr.on('data', chunk => errorChunks.push(chunk));
+    child.on('error', error => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', code => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error(Buffer.concat(errorChunks).toString('utf8').trim() || `ADB 命令失败：${args.join(' ')}`));
+        return;
+      }
+      resolve(Buffer.concat(chunks));
+    });
+  });
+}
+
+function screenshotBufferAsync() {
+  return runAdbAsync(['-s', getActiveSerial(), 'shell', 'screencap', '-p'], { timeout: 5000 });
+}
+
 function scroll(direction = 'down', amount = 500) {
   const size = adbForDevice(['shell', 'wm', 'size']);
   const match = size.match(/(\d+)x(\d+)/);
@@ -244,6 +277,7 @@ module.exports = {
   getSnapshot,
   screenshot,
   screenshotBuffer,
+  screenshotBufferAsync,
   scroll,
   waitForElement,
 };

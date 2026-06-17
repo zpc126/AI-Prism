@@ -1208,13 +1208,20 @@ const deviceMirrorState = {
   timer: null,
   expanded: false,
   running: false,
+  loading: false,
+  frameCount: 0,
 };
+
+const DEVICE_MIRROR_MIN_DELAY = 120;
 
 function initDeviceMirrorIsland() {
   $('#btn-device-mirror-expand')?.addEventListener('click', () => setDeviceMirrorExpanded(true));
   $('#btn-device-mirror-collapse')?.addEventListener('click', () => setDeviceMirrorExpanded(false));
   $('#btn-device-mirror-close')?.addEventListener('click', closeDeviceMirrorIsland);
-  $('#btn-device-mirror-refresh')?.addEventListener('click', () => refreshDeviceMirrorFrame(true));
+  $('#btn-device-mirror-refresh')?.addEventListener('click', () => {
+    clearDeviceMirrorTimer();
+    refreshDeviceMirrorFrame(true);
+  });
   $('#device-mirror-collapsed')?.addEventListener('click', (event) => {
     if (event.target.closest('button')) return;
     setDeviceMirrorExpanded(true);
@@ -1250,34 +1257,50 @@ function closeDeviceMirrorIsland() {
 function startDeviceMirrorPolling() {
   if (deviceMirrorState.running) return;
   deviceMirrorState.running = true;
+  deviceMirrorState.frameCount = 0;
   refreshDeviceMirrorFrame(true);
-  deviceMirrorState.timer = setInterval(() => refreshDeviceMirrorFrame(false), 1200);
 }
 
 function stopDeviceMirrorPolling() {
   deviceMirrorState.running = false;
-  if (deviceMirrorState.timer) {
-    clearInterval(deviceMirrorState.timer);
-    deviceMirrorState.timer = null;
-  }
+  deviceMirrorState.loading = false;
+  clearDeviceMirrorTimer();
+}
+
+function clearDeviceMirrorTimer() {
+  if (!deviceMirrorState.timer) return;
+  clearTimeout(deviceMirrorState.timer);
+  deviceMirrorState.timer = null;
+}
+
+function scheduleNextDeviceMirrorFrame(delay = DEVICE_MIRROR_MIN_DELAY) {
+  clearDeviceMirrorTimer();
+  if (!deviceMirrorState.running) return;
+  deviceMirrorState.timer = setTimeout(() => refreshDeviceMirrorFrame(false), delay);
 }
 
 function refreshDeviceMirrorFrame(manual = false) {
+  if (deviceMirrorState.loading) return;
   const img = $('#device-mirror-img');
   const empty = $('#device-mirror-empty');
   const status = $('#device-mirror-status');
   const subtitle = $('#device-mirror-subtitle');
   if (!img) return;
 
+  deviceMirrorState.loading = true;
   const startedAt = Date.now();
-  if (status) status.textContent = manual ? '正在刷新画面...' : '实时刷新中';
+  if (status) status.textContent = manual ? '正在刷新画面...' : `实时刷新中 · ${deviceMirrorState.frameCount} 帧`;
   img.onload = () => {
+    deviceMirrorState.loading = false;
+    deviceMirrorState.frameCount += 1;
     empty?.classList.add('hidden');
     const cost = Date.now() - startedAt;
-    if (status) status.textContent = `已刷新 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
-    if (subtitle) subtitle.textContent = `画面同步中 · ${cost}ms`;
+    if (status) status.textContent = `已刷新 · ${deviceMirrorState.frameCount} 帧`;
+    if (subtitle) subtitle.textContent = `同步中 · ${cost}ms/帧`;
+    scheduleNextDeviceMirrorFrame(cost > 900 ? 60 : DEVICE_MIRROR_MIN_DELAY);
   };
   img.onerror = () => {
+    deviceMirrorState.loading = false;
     empty?.classList.remove('hidden');
     if (empty) empty.textContent = '获取画面失败，请确认 ADB 已连接';
     if (status) status.textContent = '投屏失败';

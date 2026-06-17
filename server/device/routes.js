@@ -3,7 +3,7 @@
 // position: 手机自动化设备管理路由
 
 const express = require('express');
-const { getDeviceStatus, connectDevice, pairDevice, screenshotBuffer } = require('./adb-device');
+const { getDeviceStatus, connectDevice, pairDevice, screenshotBufferAsync } = require('./adb-device');
 
 const router = express.Router();
 
@@ -27,9 +27,9 @@ router.post('/adb/pair', (req, res) => {
   }
 });
 
-router.get('/adb/screenshot', (_req, res) => {
+router.get('/adb/screenshot', async (_req, res) => {
   try {
-    const image = screenshotBuffer();
+    const image = await screenshotBufferAsync();
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.end(image);
