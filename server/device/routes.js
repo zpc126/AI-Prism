@@ -3,7 +3,7 @@
 // position: 手机自动化设备管理路由
 
 const express = require('express');
-const { getDeviceStatus, connectDevice, pairDevice, screenshotBufferAsync } = require('./adb-device');
+const { getDeviceStatus, connectDevice, pairDevice, screenshotBufferAsync, compressedScreenshotBuffer } = require('./adb-device');
 
 const router = express.Router();
 
@@ -29,10 +29,27 @@ router.post('/adb/pair', (req, res) => {
 
 router.get('/adb/screenshot', async (_req, res) => {
   try {
-    const image = await screenshotBufferAsync();
-    res.setHeader('Content-Type', 'image/png');
+    const startedAt = Date.now();
+    const raw = _req.query.raw === '1';
+    if (raw) {
+      const image = await screenshotBufferAsync();
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('X-Prism-Mirror-Mode', 'raw-png');
+      res.setHeader('X-Prism-Mirror-Cost', String(Date.now() - startedAt));
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      res.end(image);
+      return;
+    }
+    const image = await compressedScreenshotBuffer({
+      maxWidth: _req.query.width || 420,
+      quality: _req.query.quality || 72,
+    });
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('X-Prism-Mirror-Mode', 'compressed-jpeg');
+    res.setHeader('X-Prism-Mirror-Cost', String(Date.now() - startedAt));
+    res.setHeader('X-Prism-Mirror-Original-Bytes', String(image.originalBytes));
     res.setHeader('Cache-Control', 'no-store, max-age=0');
-    res.end(image);
+    res.end(image.buffer);
   } catch (error) {
     res.status(400).json({ success: false, error: error.message, status: getDeviceStatus() });
   }

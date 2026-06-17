@@ -6,6 +6,7 @@ const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
 
 function resolveAdbPath() {
   const configured = process.env.ADB_PATH;
@@ -244,6 +245,18 @@ function screenshotBufferAsync() {
   return runAdbAsync(['-s', getActiveSerial(), 'shell', 'screencap', '-p'], { timeout: 5000 });
 }
 
+async function compressedScreenshotBuffer({ maxWidth = 420, quality = 72 } = {}) {
+  const png = await screenshotBufferAsync();
+  const image = await loadImage(png);
+  const scale = Math.min(1, Number(maxWidth) / image.width);
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = createCanvas(width, height);
+  canvas.getContext('2d').drawImage(image, 0, 0, width, height);
+  const buffer = await canvas.encode('jpeg', Math.max(30, Math.min(90, Number(quality) || 72)));
+  return { buffer, width, height, originalBytes: png.length };
+}
+
 function scroll(direction = 'down', amount = 500) {
   const size = adbForDevice(['shell', 'wm', 'size']);
   const match = size.match(/(\d+)x(\d+)/);
@@ -278,6 +291,7 @@ module.exports = {
   screenshot,
   screenshotBuffer,
   screenshotBufferAsync,
+  compressedScreenshotBuffer,
   scroll,
   waitForElement,
 };

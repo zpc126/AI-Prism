@@ -1307,7 +1307,7 @@ function refreshDeviceMirrorFrame(manual = false) {
     if (subtitle) subtitle.textContent = 'ADB 截图失败';
     stopDeviceMirrorPolling();
   };
-  img.src = `${API_BASE}/device/adb/screenshot?t=${Date.now()}`;
+  img.src = `${API_BASE}/device/adb/screenshot?width=420&quality=72&t=${Date.now()}`;
 }
 
 // ========== 执行用例 ==========
