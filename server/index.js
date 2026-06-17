@@ -958,6 +958,14 @@ function startServer(
       } catch (e) {
         console.error('评估 WebSocket 启动失败:', e.message);
       }
+
+      try {
+        const { initBrowserScrcpyWs } = require('./device/scrcpy-browser');
+        initBrowserScrcpyWs(server);
+        console.log('Android 浏览器投屏 WebSocket 已启动');
+      } catch (e) {
+        console.error('Android 浏览器投屏 WebSocket 启动失败:', e.message);
+      }
       
       resolve(server);
     });

@@ -8,7 +8,13 @@ let wss;
 const clients = new Set();
 
 function initWs(server) {
-  wss = new WebSocketServer({ server, path: '/ws/eval' });
+  wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (request, socket, head) => {
+    if (!request.url || !request.url.startsWith('/ws/eval')) return;
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  });
   
   wss.on('connection', (ws) => {
     clients.add(ws);

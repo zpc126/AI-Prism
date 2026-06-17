@@ -1206,10 +1206,14 @@ async function pairWirelessAdb() {
 
 const deviceMirrorState = {
   timer: null,
+  ws: null,
+  decoder: null,
+  canvasContext: null,
   expanded: false,
   running: false,
   loading: false,
   frameCount: 0,
+  videoInfo: null,
   mode: 'snapshot',
 };
 
@@ -1246,20 +1250,7 @@ async function openDeviceMirrorIsland() {
   island.classList.remove('hidden');
   setDeviceMirrorExpanded(true);
 
-  try {
-    const response = await fetch(`${API_BASE}/device/scrcpy/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ maxSize: 1024, maxFps: 60, bitRate: '8M' })
-    });
-    const data = await response.json();
-    if (!response.ok || !data.success) throw new Error(data.error || 'scrcpy 启动失败');
-    showScrcpyMirrorStatus(data.status);
-  } catch (error) {
-    console.warn('scrcpy 投屏启动失败，降级到截图模式:', error.message);
-    showSnapshotMirrorStatus(error.message);
-    startDeviceMirrorPolling();
-  }
+  openBrowserScrcpyMirror();
 }
 
 function setDeviceMirrorExpanded(expanded) {
@@ -1269,42 +1260,48 @@ function setDeviceMirrorExpanded(expanded) {
 }
 
 function closeDeviceMirrorIsland() {
+  closeBrowserScrcpyMirror();
   stopDeviceMirrorPolling();
   stopScrcpyMirror();
   $('#device-mirror-island')?.classList.add('hidden');
 }
 
-function showScrcpyMirrorStatus(status = {}) {
-  deviceMirrorState.mode = 'scrcpy';
+function showBrowserScrcpyMirrorStatus(status = {}) {
+  deviceMirrorState.mode = 'browser-scrcpy';
   stopDeviceMirrorPolling();
-  $('#device-mirror-title').textContent = 'scrcpy 低延迟投屏';
-  $('#device-mirror-subtitle').textContent = status.reused ? '低延迟窗口已在运行' : '低延迟窗口已打开';
-  $('#device-mirror-detail').textContent = 'scrcpy 视频流模式 · 延迟远低于 ADB 截图';
-  $('#device-mirror-status').textContent = `已连接 ${status.device?.model || 'Android 真机'}`;
+  $('#device-mirror-title').textContent = 'Android 真机投屏';
+  $('#device-mirror-subtitle').textContent = '浏览器内 scrcpy 视频流';
+  $('#device-mirror-detail').textContent = 'H264 + WebCodecs · 不走 ADB 截图轮询';
+  $('#device-mirror-status').textContent = status.message || `已连接 ${status.device?.model || 'Android 真机'}`;
   const empty = $('#device-mirror-empty');
   const img = $('#device-mirror-img');
+  const canvas = $('#device-mirror-canvas');
   if (img) img.removeAttribute('src');
-  empty?.classList.remove('hidden');
-  if (empty) {
-    empty.innerHTML = 'scrcpy 低延迟窗口已打开<br><span class="text-[11px] text-zinc-600">网页内预览可用刷新按钮切回截图模式</span>';
-  }
+  img?.classList.add('hidden');
+  canvas?.classList.remove('hidden');
+  empty?.classList.toggle('hidden', Boolean(status.ready));
+  if (empty) empty.textContent = status.message || '正在启动浏览器内视频流...';
 }
 
 function showSnapshotMirrorStatus(reason = '') {
   deviceMirrorState.mode = 'snapshot';
+  closeBrowserScrcpyMirror(true);
   $('#device-mirror-title').textContent = 'Android 投屏';
   $('#device-mirror-subtitle').textContent = 'ADB 截图预览模式';
   $('#device-mirror-detail').textContent = reason
     ? `scrcpy 不可用，已降级截图：${reason}`
     : '通过 ADB 截图实时刷新';
   const empty = $('#device-mirror-empty');
+  const img = $('#device-mirror-img');
+  const canvas = $('#device-mirror-canvas');
+  img?.classList.remove('hidden');
+  canvas?.classList.add('hidden');
   if (empty) {
     empty.textContent = '正在获取手机画面...';
   }
 }
 
 async function stopScrcpyMirror() {
-  if (deviceMirrorState.mode !== 'scrcpy') return;
   try {
     await fetch(`${API_BASE}/device/scrcpy/stop`, { method: 'POST' });
   } catch (error) {
@@ -1312,6 +1309,191 @@ async function stopScrcpyMirror() {
   } finally {
     deviceMirrorState.mode = 'snapshot';
   }
+}
+
+function getDeviceMirrorWsUrl() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws/device-mirror`;
+}
+
+function openBrowserScrcpyMirror() {
+  closeBrowserScrcpyMirror(false);
+  showBrowserScrcpyMirrorStatus({ message: '正在连接浏览器内视频流...' });
+
+  if (!('VideoDecoder' in window)) {
+    showSnapshotMirrorStatus('当前浏览器不支持 WebCodecs，已降级截图');
+    startDeviceMirrorPolling();
+    return;
+  }
+
+  const ws = new WebSocket(getDeviceMirrorWsUrl());
+  deviceMirrorState.ws = ws;
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    showBrowserScrcpyMirrorStatus({ message: '视频流已连接，等待首帧...' });
+  };
+
+  ws.onmessage = (event) => {
+    if (typeof event.data === 'string') {
+      handleDeviceMirrorMessage(event.data);
+      return;
+    }
+    handleDeviceMirrorFrame(event.data);
+  };
+
+  ws.onerror = () => {
+    showSnapshotMirrorStatus('浏览器视频流连接失败，已降级截图');
+    startDeviceMirrorPolling();
+  };
+
+  ws.onclose = () => {
+    if (deviceMirrorState.mode === 'browser-scrcpy') {
+      $('#device-mirror-status').textContent = '视频流已关闭';
+    }
+  };
+}
+
+function closeBrowserScrcpyMirror(callStop = true) {
+  if (deviceMirrorState.ws) {
+    deviceMirrorState.ws.onclose = null;
+    deviceMirrorState.ws.close();
+    deviceMirrorState.ws = null;
+  }
+  if (deviceMirrorState.decoder) {
+    try { deviceMirrorState.decoder.close(); } catch (_) {}
+    deviceMirrorState.decoder = null;
+  }
+  deviceMirrorState.canvasContext = null;
+  deviceMirrorState.videoInfo = null;
+  if (callStop) {
+    fetch(`${API_BASE}/device/scrcpy/stop`, { method: 'POST' }).catch(() => {});
+  }
+}
+
+function handleDeviceMirrorMessage(raw) {
+  let message = null;
+  try {
+    message = JSON.parse(raw);
+  } catch (_) {
+    return;
+  }
+
+  if (message.type === 'status') {
+    showBrowserScrcpyMirrorStatus({ message: message.message });
+    return;
+  }
+
+  if (message.type === 'info') {
+    deviceMirrorState.videoInfo = message;
+    const canvas = $('#device-mirror-canvas');
+    if (canvas) {
+      canvas.width = message.width || 360;
+      canvas.height = message.height || 720;
+      deviceMirrorState.canvasContext = canvas.getContext('2d');
+    }
+    showBrowserScrcpyMirrorStatus({
+      ready: true,
+      device: message.device,
+      message: `${message.deviceName || message.device?.model || 'Android'} · ${message.width}×${message.height}`,
+    });
+    return;
+  }
+
+  if (message.type === 'error') {
+    showSnapshotMirrorStatus(message.error || '浏览器视频流启动失败，已降级截图');
+    startDeviceMirrorPolling();
+    return;
+  }
+
+  if (message.type === 'end' && deviceMirrorState.mode === 'browser-scrcpy') {
+    $('#device-mirror-status').textContent = '视频流已停止';
+  }
+}
+
+function handleDeviceMirrorFrame(data) {
+  const bytes = new Uint8Array(data);
+  if (bytes.length <= 1 || !deviceMirrorState.videoInfo) return;
+
+  const keyframe = bytes[0] === 1;
+  const payload = bytes.slice(1);
+  try {
+    ensureDeviceMirrorDecoder(payload);
+  } catch (error) {
+    console.warn('投屏 VideoDecoder 初始化失败:', error.message);
+    showSnapshotMirrorStatus('视频解码初始化失败，已降级截图');
+    startDeviceMirrorPolling();
+    return;
+  }
+  if (!deviceMirrorState.decoder || deviceMirrorState.decoder.state !== 'configured') return;
+
+  try {
+    deviceMirrorState.decoder.decode(new EncodedVideoChunk({
+      type: keyframe ? 'key' : 'delta',
+      timestamp: deviceMirrorState.frameCount * 33333,
+      data: payload,
+    }));
+    deviceMirrorState.frameCount += 1;
+    $('#device-mirror-status').textContent = `实时视频流 · ${deviceMirrorState.frameCount} 帧`;
+  } catch (error) {
+    console.warn('投屏视频解码失败:', error.message);
+  }
+}
+
+function ensureDeviceMirrorDecoder(firstFrame) {
+  if (deviceMirrorState.decoder) return;
+
+  const info = deviceMirrorState.videoInfo || {};
+  const codec = parseAvcCodecString(firstFrame) || 'avc1.42E01F';
+  const canvas = $('#device-mirror-canvas');
+  const ctx = deviceMirrorState.canvasContext || canvas?.getContext('2d');
+  deviceMirrorState.canvasContext = ctx;
+
+  const decoder = new VideoDecoder({
+    output(frame) {
+      const target = $('#device-mirror-canvas');
+      const context = deviceMirrorState.canvasContext || target?.getContext('2d');
+      if (target && context) {
+        if (target.width !== frame.displayWidth || target.height !== frame.displayHeight) {
+          target.width = frame.displayWidth;
+          target.height = frame.displayHeight;
+        }
+        context.drawImage(frame, 0, 0, target.width, target.height);
+      }
+      $('#device-mirror-empty')?.classList.add('hidden');
+      frame.close();
+    },
+    error(error) {
+      console.warn('投屏 VideoDecoder 错误:', error.message);
+      showSnapshotMirrorStatus('视频解码失败，已降级截图');
+      startDeviceMirrorPolling();
+    }
+  });
+
+  const config = {
+    codec,
+    codedWidth: info.width || 360,
+    codedHeight: info.height || 720,
+    optimizeForLatency: true,
+    avc: { format: 'annexb' },
+  };
+  decoder.configure(config);
+  deviceMirrorState.decoder = decoder;
+}
+
+function parseAvcCodecString(bytes) {
+  for (let i = 0; i < bytes.length - 8; i += 1) {
+    const startCode4 = bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 0 && bytes[i + 3] === 1;
+    const startCode3 = bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 1;
+    const nalOffset = startCode4 ? i + 4 : startCode3 ? i + 3 : -1;
+    if (nalOffset < 0) continue;
+    if ((bytes[nalOffset] & 0x1f) !== 7) continue;
+    const profile = bytes[nalOffset + 1];
+    const compatibility = bytes[nalOffset + 2];
+    const level = bytes[nalOffset + 3];
+    return `avc1.${[profile, compatibility, level].map(value => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+  }
+  return '';
 }
 
 function startDeviceMirrorPolling() {
