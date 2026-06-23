@@ -1321,7 +1321,10 @@ function openBrowserScrcpyMirror() {
   showBrowserScrcpyMirrorStatus({ message: '正在连接浏览器内视频流...' });
 
   if (!('VideoDecoder' in window)) {
-    showSnapshotMirrorStatus('当前浏览器不支持 WebCodecs，已降级截图');
+    const secureHint = window.isSecureContext
+      ? '当前浏览器不支持 WebCodecs，已降级截图'
+      : '当前地址不是安全上下文，Chrome 会屏蔽 WebCodecs；请用 http://localhost:3000 或 http://127.0.0.1:3000 打开';
+    showSnapshotMirrorStatus(secureHint);
     startDeviceMirrorPolling();
     return;
   }
