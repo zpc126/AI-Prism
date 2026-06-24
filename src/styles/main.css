@@ -27,6 +27,18 @@ body {
   flex-direction: column;
 }
 
+#view-input.view.active {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+#view-input > .h-screen {
+  height: auto;
+  min-height: 100vh;
+  padding-top: 56px;
+  padding-bottom: 48px;
+}
+
 /* ========== 配色系统 ========== */
 :root {
   /* 主色 - 深邃靛蓝 */
@@ -257,6 +269,29 @@ body {
 .requirement-card:focus-within {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+#file-upload-area {
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+#file-upload-area::-webkit-scrollbar {
+  width: 6px;
+}
+
+#file-upload-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#file-upload-area::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 999px;
+}
+
+#uploaded-files > div {
+  max-width: 100%;
 }
 
 /* 快速提示 */
