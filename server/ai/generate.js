@@ -757,7 +757,10 @@ async function understandImage(imageBase64, question = '请描述这张图片的
 /**
  * 从图片提取需求
  */
-async function extractRequirementFromImage(imageBase64) {
+async function extractRequirementFromImage(imageBase64, options = {}) {
+  const isHtmlScreenshot = /html|screenshot|prototype|axure/i.test(options.sourceType || '');
+  const contextText = String(options.contextText || '').trim();
+  const filename = String(options.filename || '').trim();
   const systemPrompt = `你是一个需求分析专家。用户会给你一张 UI 设计图或原型图，请从中提取出功能需求。
 
 输出格式：
@@ -765,9 +768,24 @@ async function extractRequirementFromImage(imageBase64) {
 2. 功能点列表（每个功能点包含：功能名、描述、涉及的交互）
 3. 注意事项或边界条件
 
-请用清晰的结构输出。`;
+请用清晰的结构输出。
+
+特别注意：
+- 如果图片来自 HTML/原型截图，请以截图中的可见页面、标题、菜单、按钮、表单、表格、状态和业务文案为准。
+- 不要根据 HTML 文件名或通用后台模板臆造需求。
+- 如果截图信息很少，只输出已能确认的业务范围，并明确提示“截图信息不足”。`;
   
-  return await callLLMWithImage(systemPrompt, '请简洁提取这张图片中的功能需求和关键交互，不要展开解释', imageBase64, 1200);
+  const userText = [
+    isHtmlScreenshot
+      ? '这是一张 HTML/原型页面渲染后的截图。请直接阅读截图里的页面内容，提取可以用于生成测试用例的需求、模块、字段、按钮、流程和规则。'
+      : '请简洁提取这张图片中的功能需求和关键交互，不要展开解释',
+    filename ? `文件名：${filename}` : '',
+    contextText
+      ? `以下是系统从 HTML 中辅助抽取的文本，只作参考，最终以截图可见内容为准：\n${contextText.slice(0, 8000)}`
+      : '',
+  ].filter(Boolean).join('\n\n');
+
+  return await callLLMWithImage(systemPrompt, userText, imageBase64, isHtmlScreenshot ? 1800 : 1200);
 }
 
 // 需求分析

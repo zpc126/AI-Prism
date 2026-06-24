@@ -358,8 +358,18 @@ function getMindMapRootTitle() {
 }
 
 async function prepareRequirementFromUploads() {
-  const imageFiles = state.uploadedFiles.filter(file => file.type === 'image' && file.base64);
-  if (state.requirement || imageFiles.length === 0) return;
+  const visionFiles = state.uploadedFiles.filter(file =>
+    file.base64 && (file.type === 'image' || file.visionInput || file.visionSource)
+  );
+  const pendingVisionFiles = visionFiles.filter(file => !file.extractedText);
+  if (visionFiles.length === 0 || (state.requirement && pendingVisionFiles.length === 0)) return;
+  if (pendingVisionFiles.length === 0) {
+    state.requirement = visionFiles.map(file => file.extractedText).filter(Boolean).join('\n\n');
+    state.rootTitle = deriveRootTitle(state.requirement);
+    const input = $('#requirement-input');
+    if (input) input.value = state.requirement;
+    return;
+  }
 
   const btnStart = $('#btn-start');
   const hint = $('#input-hint');
@@ -367,10 +377,10 @@ async function prepareRequirementFromUploads() {
 
   if (btnStart) {
     btnStart.disabled = true;
-    btnStart.textContent = '识别图片中...';
+    btnStart.textContent = '识别视觉材料中...';
   }
   if (hint) {
-    hint.textContent = `正在识别原图 0/${imageFiles.length} · 0秒`;
+    hint.textContent = `正在识别视觉材料 0/${pendingVisionFiles.length || visionFiles.length} · 0秒`;
     hint.className = 'text-xs text-zinc-500 mt-2 text-center';
   }
 
@@ -379,12 +389,12 @@ async function prepareRequirementFromUploads() {
   const timer = setInterval(() => {
     if (hint) {
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      hint.textContent = `正在识别原图 ${completedImages}/${imageFiles.length} · ${elapsed}秒`;
+      hint.textContent = `正在识别视觉材料 ${completedImages}/${pendingVisionFiles.length || visionFiles.length} · ${elapsed}秒`;
     }
   }, 1000);
 
   try {
-    const requirements = await Promise.all(imageFiles.map(async file => {
+    const requirements = await Promise.all(pendingVisionFiles.map(async file => {
       if (file.extractedText) {
         return file.extractedText;
       }
@@ -392,7 +402,12 @@ async function prepareRequirementFromUploads() {
       const response = await fetch(`${API_BASE}/extract-requirement`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: file.base64 })
+        body: JSON.stringify({
+          imageBase64: file.base64,
+          contextText: file.textFallback || file.text || '',
+          sourceType: file.visionSource || file.type,
+          filename: file.filename || ''
+        })
       });
       const data = await response.json();
       if (!response.ok || !data.success || !data.requirement) {
@@ -408,7 +423,11 @@ async function prepareRequirementFromUploads() {
       return data.requirement;
     }));
 
-    state.requirement = requirements.join('\n\n');
+    const mergedRequirement = [state.requirement, ...requirements]
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+      .join('\n\n');
+    state.requirement = mergedRequirement;
     state.rootTitle = deriveRootTitle(state.requirement);
     const input = $('#requirement-input');
     if (input) input.value = state.requirement;
@@ -598,10 +617,14 @@ function initViewInput() {
         if (data.success) {
           // 更新标签为成功状态
           const isImage = file.type.startsWith('image/');
+          const isVisionDocument = Boolean(data.data.visionInput && data.data.base64);
+          const previewSrc = isImage ? URL.createObjectURL(file) : data.data.base64;
+          const statusText = isVisionDocument ? '已转截图' : file.name;
           tag.className = 'flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-50 border border-zinc-200 rounded-md text-xs';
-          tag.innerHTML = isImage ? `
-            <img src="${URL.createObjectURL(file)}" class="w-8 h-8 object-cover rounded" />
+          tag.innerHTML = (isImage || isVisionDocument) ? `
+            <img src="${previewSrc}" class="w-8 h-8 object-cover rounded" />
             <span class="text-zinc-600">${escapeHtml(file.name)}</span>
+            ${isVisionDocument ? '<span class="text-[10px] text-blue-500">已转截图</span>' : ''}
             <button class="ml-1 text-zinc-400 hover:text-zinc-600" onclick="removeFile('${fileId}')">&times;</button>
           ` : `
             <svg class="w-3.5 h-3.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -617,7 +640,7 @@ function initViewInput() {
           updateStartButton();
           
           // 将解析的文本添加到输入框
-          if (data.data.text) {
+          if (data.data.text && !isVisionDocument) {
             const currentText = input.value;
             const newText = currentText ? currentText + '\n\n' + data.data.text : data.data.text;
             input.value = newText;

@@ -418,11 +418,11 @@ app.post('/api/understand-image', async (req, res) => {
 // 从图片提取需求
 app.post('/api/extract-requirement', async (req, res) => {
   try {
-    const { imageBase64 } = req.body;
+    const { imageBase64, contextText = '', sourceType = '', filename = '' } = req.body;
     if (!imageBase64) {
       return res.status(400).json({ success: false, error: '请提供图片' });
     }
-    const result = await extractRequirementFromImage(imageBase64);
+    const result = await extractRequirementFromImage(imageBase64, { contextText, sourceType, filename });
     res.json({ success: true, requirement: result });
   } catch (error) {
     console.error('需求提取失败:', error);

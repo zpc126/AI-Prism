@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 /**
  * 解析 PDF 文件
@@ -125,45 +126,360 @@ function parseText(filePath) {
 }
 
 /**
- * 解析 HTML 文件，保留需求文档中的可见结构化文本
+ * 规范化可见文本
  */
-function parseHtml(filePath) {
+function normalizeVisibleText(value) {
+  return String(value || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function splitVisibleText(value) {
+  return normalizeVisibleText(value)
+    .split(/\n+|(?<=。)|(?<=；)/)
+    .map(line => normalizeVisibleText(line))
+    .filter(Boolean);
+}
+
+function pushUnique(list, value, limit = 80) {
+  const text = normalizeVisibleText(value);
+  if (!text || text.length < 2) return;
+  if (/^(确定|取消|返回|保存|提交)$/.test(text) && list.includes(text)) return;
+  if (list.some(item => item === text)) return;
+  list.push(text.length > limit ? `${text.slice(0, limit)}...` : text);
+}
+
+function isNoiseText(text) {
+  if (!text) return true;
+  if (/^(javascript|resources\/|data\/|files\/|http|https|rgba?\(|#[0-9a-f]{3,8})/i.test(text)) return true;
+  if (/^(px|auto|none|block|hidden|visible|absolute|relative|static)$/i.test(text)) return true;
+  if (/^\d{1,4}$/.test(text)) return true;
+  return false;
+}
+
+function formatSection(title, items, emptyText = '未识别到') {
+  if (!items || items.length === 0) return `【${title}】\n- ${emptyText}`;
+  return `【${title}】\n${items.map(item => `- ${item}`).join('\n')}`;
+}
+
+function buildHtmlTextSummary({ sourceName, title, metaDescription, headings, importantLines, formFields, actions, tables, bodyLines, isBundlePage = false }) {
+  const lines = [];
+  lines.push(isBundlePage ? `### ${sourceName || title || '未命名页面'}` : '【HTML需求结构化摘要】');
+  if (!isBundlePage) {
+    lines.push(`来源文件：${sourceName || '未知 HTML'}`);
+    lines.push('解析说明：已过滤脚本、样式、布局节点，只保留页面标题、业务文案、表单、按钮、链接和表格线索。');
+  }
+  if (title) lines.push(`页面标题：${title}`);
+  if (metaDescription) lines.push(`页面描述：${metaDescription}`);
+  lines.push('');
+  lines.push(formatSection('页面/模块层级', headings.slice(0, 18), title || '未识别到明确标题'));
+  lines.push('');
+  lines.push(formatSection('需求/业务规则线索', importantLines.slice(0, 30)));
+  lines.push('');
+  lines.push(formatSection('表单字段', formFields.slice(0, 28)));
+  lines.push('');
+  lines.push(formatSection('按钮/链接/操作入口', actions.slice(0, 30)));
+  lines.push('');
+  lines.push(formatSection('表格/列表字段', tables.slice(0, 18)));
+  lines.push('');
+  lines.push(formatSection('可见正文片段', bodyLines.slice(0, 80)));
+
+  const usableSignals = headings.length + importantLines.length + formFields.length + actions.length + tables.length + bodyLines.length;
+  if (usableSignals < 12) {
+    lines.push('');
+    lines.push('【信息完整性提示】');
+    lines.push('- 当前 HTML 可见需求信息偏少，生成用例时只覆盖已出现的模块和业务范围，不要臆造未出现的详细规则。');
+    lines.push('- 如果这是 Axure/原型导出页，建议上传整个导出目录的 ZIP 包，单个 HTML 往往只包含当前页摘要。');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 解析 HTML 内容，保留更适合生成测试用例的结构化信息
+ */
+function parseHtmlContent(content, sourceName = 'HTML 文档', options = {}) {
   try {
     const cheerio = require('cheerio');
-    const content = fs.readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
-    const $ = cheerio.load(content);
+    const $ = cheerio.load(String(content || '').replace(/^\uFEFF/, ''));
 
-    $('script, style, noscript, template, svg').remove();
+    $('script, style, noscript, template, svg, canvas, iframe').remove();
 
-    const title = $('title').first().text().replace(/\s+/g, ' ').trim();
-    const lines = [];
-    const pushLine = (value) => {
-      const text = String(value || '')
-        .replace(/\u00a0/g, ' ')
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\s*\n\s*/g, ' ')
-        .trim();
-      if (text && lines[lines.length - 1] !== text) lines.push(text);
-    };
+    const title = normalizeVisibleText($('title').first().text());
+    const metaDescription = normalizeVisibleText(
+      $('meta[name="description"]').attr('content') ||
+      $('meta[property="og:description"]').attr('content') ||
+      ''
+    );
 
-    if (title) pushLine(title);
-    $('h1, h2, h3, h4, h5, h6, p, li, th, td').each((_, element) => {
-      pushLine($(element).text());
+    const headings = [];
+    const importantLines = [];
+    const formFields = [];
+    const actions = [];
+    const tables = [];
+    const bodyLines = [];
+
+    const importantPattern = /(需求|范围|模块|功能|流程|规则|状态|权限|字段|校验|异常|边界|质检|售后|订单|下单|小程序|管理|新增|修改|删除|支持|优化|重构|审核|导入|导出|查询|筛选|提示|限制|配置|报表|报告|统计|支付|退款|库存|采购|供应商|门店|用户|角色)/;
+
+    if (title) pushUnique(headings, title, 60);
+
+    $('h1, h2, h3, h4, h5, h6').each((_, element) => {
+      const level = element.tagName ? element.tagName.toUpperCase() : 'H';
+      pushUnique(headings, `${level} ${$(element).text()}`, 90);
     });
 
-    // 部分简单 HTML 没有语义标签，回退到 body 可见文本。
-    if (lines.length <= (title ? 1 : 0)) {
-      $('body').text().split(/\n+/).forEach(pushLine);
+    // Axure/原型导出常用 ax_default + _标题 类表达标题。
+    $('[class*="标题"], [class*="heading"], [class*="title"]').each((_, element) => {
+      const text = normalizeVisibleText($(element).text());
+      if (text && text.length <= 80) pushUnique(headings, text, 80);
+    });
+
+    $('p, li, dd, dt, blockquote, [class*="text"], [id$="_text"]').each((_, element) => {
+      splitVisibleText($(element).text()).forEach(line => {
+        if (isNoiseText(line)) return;
+        pushUnique(bodyLines, line, 140);
+        if (importantPattern.test(line)) pushUnique(importantLines, line, 150);
+      });
+    });
+
+    $('input, textarea, select').each((_, element) => {
+      const $el = $(element);
+      const id = $el.attr('id');
+      const name = $el.attr('name');
+      const type = ($el.attr('type') || element.tagName || '').toLowerCase();
+      const label = normalizeVisibleText(
+        (id ? $(`label[for="${id}"]`).first().text() : '') ||
+        $el.closest('label').text() ||
+        $el.attr('aria-label') ||
+        $el.attr('placeholder') ||
+        name ||
+        id ||
+        ''
+      );
+      if (!label || isNoiseText(label)) return;
+      const required = $el.attr('required') !== undefined ? '，必填' : '';
+      const placeholder = normalizeVisibleText($el.attr('placeholder'));
+      const optionTexts = element.tagName?.toLowerCase() === 'select'
+        ? $el.find('option').map((__, option) => normalizeVisibleText($(option).text())).get().filter(Boolean).slice(0, 6)
+        : [];
+      const optionText = optionTexts.length ? `，选项：${optionTexts.join('/')}` : '';
+      const placeholderText = placeholder && placeholder !== label ? `，占位：${placeholder}` : '';
+      pushUnique(formFields, `${label}（${type || '字段'}${required}${placeholderText}${optionText}）`, 150);
+    });
+
+    $('button, a, [role="button"], input[type="button"], input[type="submit"], input[type="reset"]').each((_, element) => {
+      const $el = $(element);
+      const text = normalizeVisibleText($el.text() || $el.attr('value') || $el.attr('aria-label') || $el.attr('title') || '');
+      if (!text || isNoiseText(text)) return;
+      const href = normalizeVisibleText($el.attr('href'));
+      const hrefText = href && !href.startsWith('#') && href.length < 80 ? ` -> ${href}` : '';
+      pushUnique(actions, `${text}${hrefText}`, 100);
+    });
+
+    $('table').each((index, table) => {
+      const $table = $(table);
+      const rows = $table.find('tr').map((_, tr) => {
+        return $(tr).find('th,td').map((__, cell) => normalizeVisibleText($(cell).text())).get().filter(Boolean);
+      }).get().filter(row => Array.isArray(row) && row.length > 0);
+      if (rows.length === 0) return;
+      const header = rows.find(row => row.length >= 2) || rows[0];
+      const text = header.slice(0, 8).join(' / ');
+      if (text && !isNoiseText(text)) pushUnique(tables, `表格${index + 1}：${text}`, 160);
+    });
+
+    if (bodyLines.length === 0) {
+      splitVisibleText($('body').text()).forEach(line => {
+        if (!isNoiseText(line)) pushUnique(bodyLines, line, 140);
+      });
     }
+
+    const text = buildHtmlTextSummary({
+      sourceName,
+      title,
+      metaDescription,
+      headings,
+      importantLines,
+      formFields,
+      actions,
+      tables,
+      bodyLines,
+      isBundlePage: options.isBundlePage,
+    });
 
     return {
       type: 'html',
-      text: lines.join('\n'),
+      text: text.length > 24000 ? `${text.slice(0, 24000)}\n\n【截断提示】HTML 内容较长，已保留前 24000 字用于生成。` : text,
       title,
-      lines: lines.length,
+      lines: bodyLines.length,
+      summary: {
+        headings: headings.length,
+        importantLines: importantLines.length,
+        formFields: formFields.length,
+        actions: actions.length,
+        tables: tables.length,
+      },
     };
   } catch (error) {
     throw new Error(`HTML 解析失败: ${error.message}`);
+  }
+}
+
+function resolveChromeExecutable() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  ].filter(Boolean);
+  return candidates.find(candidate => fs.existsSync(candidate)) || '';
+}
+
+async function renderHtmlScreenshot(filePath) {
+  let browser = null;
+  try {
+    const { chromium } = require('playwright');
+    const executablePath = resolveChromeExecutable();
+    const launchOptions = {
+      headless: true,
+      args: ['--allow-file-access-from-files', '--disable-web-security'],
+    };
+    if (executablePath) launchOptions.executablePath = executablePath;
+
+    browser = await chromium.launch(launchOptions);
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 1200 },
+      deviceScaleFactor: 1,
+    });
+
+    await page.goto(`file://${path.resolve(filePath)}`, { waitUntil: 'load', timeout: 20000 });
+    await page.waitForTimeout(500);
+
+    const size = await page.evaluate(() => ({
+      width: Math.max(document.documentElement.scrollWidth || 0, document.body?.scrollWidth || 0, 1440),
+      height: Math.max(document.documentElement.scrollHeight || 0, document.body?.scrollHeight || 0, 900),
+    }));
+    const width = Math.min(Math.max(size.width, 1024), 1800);
+    const height = Math.min(Math.max(size.height, 900), 5000);
+    await page.setViewportSize({ width, height });
+
+    const buffer = await page.screenshot({
+      type: 'jpeg',
+      quality: 92,
+      fullPage: true,
+      timeout: 20000,
+    });
+
+    return {
+      base64: `data:image/jpeg;base64,${buffer.toString('base64')}`,
+      screenshot: {
+        mimeType: 'image/jpeg',
+        size: buffer.length,
+        width,
+        height,
+      },
+    };
+  } catch (error) {
+    return { renderError: error.message };
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+/**
+ * 解析 HTML 文件
+ */
+async function parseHtml(filePath) {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const parsed = parseHtmlContent(content, path.basename(filePath));
+  const rendered = await renderHtmlScreenshot(filePath);
+  return {
+    ...parsed,
+    ...rendered,
+    visionInput: Boolean(rendered.base64),
+    visionSource: 'html-screenshot',
+    textFallback: parsed.text,
+  };
+}
+
+/**
+ * 解析 HTML/原型导出 ZIP 包
+ */
+async function parseZipArchive(filePath) {
+  try {
+    const JSZip = require('jszip');
+    const zip = await JSZip.loadAsync(fs.readFileSync(filePath));
+    const htmlFiles = Object.values(zip.files)
+      .filter(file => !file.dir && /\.html?$/i.test(file.name))
+      .filter(file => !/(^|\/)(resources|__MACOSX)\//i.test(file.name))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+
+    if (htmlFiles.length === 0) {
+      throw new Error('ZIP 中没有找到 HTML 页面');
+    }
+
+    let rendered = {};
+    let tempDir = '';
+    try {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-html-'));
+      for (const file of Object.values(zip.files)) {
+        if (file.dir) continue;
+        const targetPath = path.normalize(path.join(tempDir, file.name));
+        if (!targetPath.startsWith(tempDir)) continue;
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, await file.async('nodebuffer'));
+      }
+      const mainHtml = htmlFiles.find(file => /(^|\/)(index|home|start|main)\.html?$/i.test(file.name)) || htmlFiles[0];
+      rendered = await renderHtmlScreenshot(path.join(tempDir, mainHtml.name));
+      if (rendered.base64) {
+        rendered.renderedPage = mainHtml.name;
+      }
+    } catch (error) {
+      rendered = { renderError: error.message };
+    } finally {
+      if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+
+    const pages = [];
+    for (const file of htmlFiles.slice(0, 40)) {
+      const content = await file.async('string');
+      const parsed = parseHtmlContent(content, file.name, { isBundlePage: true });
+      pages.push({
+        name: file.name,
+        title: parsed.title,
+        text: parsed.text,
+        summary: parsed.summary,
+      });
+    }
+
+    const text = [
+      '【HTML原型包结构化摘要】',
+      `来源文件：${path.basename(filePath)}`,
+      `页面数量：${htmlFiles.length}${htmlFiles.length > pages.length ? `（已解析前 ${pages.length} 个页面）` : ''}`,
+      '解析说明：已按页面抽取标题、业务文案、表单、按钮、链接和表格字段；生成用例时应按页面/模块组织，不要按 HTML 文件名机械分类。',
+      '',
+      ...pages.map(page => page.text),
+    ].join('\n\n');
+
+    return {
+      type: 'html_bundle',
+      text: text.length > 50000 ? `${text.slice(0, 50000)}\n\n【截断提示】HTML 原型包内容较长，已保留前 50000 字用于生成。` : text,
+      ...rendered,
+      visionInput: Boolean(rendered.base64),
+      visionSource: 'html-bundle-screenshot',
+      textFallback: text,
+      files: htmlFiles.length,
+      parsedFiles: pages.length,
+      pages: pages.map(page => ({
+        name: page.name,
+        title: page.title,
+        summary: page.summary,
+      })),
+    };
+  } catch (error) {
+    throw new Error(`ZIP 解析失败: ${error.message}`);
   }
 }
 
@@ -196,7 +512,9 @@ async function parseFile(filePath) {
       return parseText(filePath);
     case '.html':
     case '.htm':
-      return parseHtml(filePath);
+      return await parseHtml(filePath);
+    case '.zip':
+      return await parseZipArchive(filePath);
     default:
       throw new Error(`不支持的文件格式: ${ext}`);
   }
@@ -222,7 +540,7 @@ function getMimeType(ext) {
  */
 function isSupportedFile(filename) {
   const ext = path.extname(filename).toLowerCase();
-  const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.txt', '.md', '.html', '.htm'];
+  const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.txt', '.md', '.html', '.htm', '.zip'];
   return supportedExts.includes(ext);
 }
 
@@ -247,6 +565,7 @@ function getFileTypeDesc(filename) {
     '.md': 'Markdown 文档',
     '.html': 'HTML 文档',
     '.htm': 'HTML 文档',
+    '.zip': 'HTML 原型包',
   };
   return descMap[ext] || '未知格式';
 }
@@ -259,6 +578,8 @@ module.exports = {
   parseImage,
   parseText,
   parseHtml,
+  parseHtmlContent,
+  parseZipArchive,
   isSupportedFile,
   getFileTypeDesc,
 };

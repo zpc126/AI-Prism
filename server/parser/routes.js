@@ -138,7 +138,7 @@ router.get('/supported-formats', (req, res) => {
   res.json({
     success: true,
     formats: {
-      documents: ['.pdf', '.docx', '.doc', '.html', '.htm'],
+      documents: ['.pdf', '.docx', '.doc', '.html', '.htm', '.zip'],
       images: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'],
       text: ['.txt', '.md'],
     },
