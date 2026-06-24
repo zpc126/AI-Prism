@@ -27,6 +27,7 @@ const state = {
 
 // 全局函数：移除上传的文件
 window.removeFile = function(fileId) {
+  if (window.event) window.event.stopPropagation();
   // 从状态中移除
   const file = state.uploadedFiles.find(f => f.id === fileId);
   state.uploadedFiles = state.uploadedFiles.filter(f => f.id !== fileId);
@@ -50,6 +51,54 @@ window.removeFile = function(fileId) {
     if (area) area.classList.add('hidden');
   }
   updateStartButton();
+};
+
+window.openUploadedFilePreview = function(fileId) {
+  const file = state.uploadedFiles.find(f => f.id === fileId);
+  if (!file) return;
+
+  const previewSrc = file.base64 || file.previewSrc || '';
+  const canPreviewImage = Boolean(previewSrc && (file.type === 'image' || file.visionInput || file.visionSource));
+  const title = file.filename || '文件预览';
+  const sourceLabel = file.visionSource === 'html-screenshot'
+    ? 'HTML 渲染截图'
+    : file.visionSource === 'html-bundle-screenshot'
+      ? `HTML 原型包截图${file.renderedPage ? ` · ${file.renderedPage}` : ''}`
+      : file.type === 'image'
+        ? '原图'
+        : '文本预览';
+
+  const modal = document.createElement('div');
+  modal.className = 'upload-preview-modal fixed inset-0 bg-black/35 backdrop-blur-sm z-[270] flex items-center justify-center p-5';
+  modal.innerHTML = `
+    <div class="bg-white rounded-2xl border border-zinc-100 shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-zinc-800 truncate">${escapeHtml(title)}</div>
+          <div class="text-xs text-zinc-400 mt-0.5">${escapeHtml(sourceLabel)}${file.screenshot ? ` · ${file.screenshot.width || '-'}×${file.screenshot.height || '-'}` : ''}</div>
+        </div>
+        <button class="close-upload-preview text-zinc-400 hover:text-zinc-700 px-2 py-1 rounded-lg">关闭</button>
+      </div>
+      <div class="flex-1 overflow-auto bg-zinc-50 p-5">
+        ${canPreviewImage ? `
+          <img src="${previewSrc}" alt="${escapeHtml(title)}" class="mx-auto rounded-xl border border-zinc-200 bg-white shadow-sm max-w-none" style="max-height:none;" />
+        ` : `
+          <pre class="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-600 bg-white border border-zinc-100 rounded-xl p-4">${escapeHtml(file.text || '暂无可预览内容')}</pre>
+        `}
+        ${file.textFallback ? `
+          <details class="mt-4 bg-white border border-zinc-100 rounded-xl p-4">
+            <summary class="cursor-pointer text-xs text-zinc-500">查看辅助抽取文本</summary>
+            <pre class="mt-3 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-zinc-500">${escapeHtml(file.textFallback)}</pre>
+          </details>
+        ` : ''}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector('.close-upload-preview')?.addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', event => {
+    if (event.target === modal) modal.remove();
+  });
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -619,19 +668,22 @@ function initViewInput() {
           const isImage = file.type.startsWith('image/');
           const isVisionDocument = Boolean(data.data.visionInput && data.data.base64);
           const previewSrc = isImage ? URL.createObjectURL(file) : data.data.base64;
-          const statusText = isVisionDocument ? '已转截图' : file.name;
-          tag.className = 'flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-50 border border-zinc-200 rounded-md text-xs';
+          tag.className = 'flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-50 border border-zinc-200 rounded-md text-xs cursor-pointer hover:bg-zinc-100 transition-colors';
+          tag.setAttribute('onclick', `openUploadedFilePreview('${fileId}')`);
+          tag.title = '点击预览';
           tag.innerHTML = (isImage || isVisionDocument) ? `
             <img src="${previewSrc}" class="w-8 h-8 object-cover rounded" />
             <span class="text-zinc-600">${escapeHtml(file.name)}</span>
             ${isVisionDocument ? '<span class="text-[10px] text-blue-500">已转截图</span>' : ''}
-            <button class="ml-1 text-zinc-400 hover:text-zinc-600" onclick="removeFile('${fileId}')">&times;</button>
+            <span class="text-[10px] text-zinc-400">查看</span>
+            <button class="ml-1 text-zinc-400 hover:text-zinc-600" onclick="removeFile('${fileId}')" title="移除">&times;</button>
           ` : `
             <svg class="w-3.5 h-3.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
             </svg>
             <span class="text-zinc-600">${escapeHtml(file.name)}</span>
-            <button class="ml-1 text-zinc-400 hover:text-zinc-600" onclick="removeFile('${fileId}')">&times;</button>
+            <span class="text-[10px] text-zinc-400">可预览</span>
+            <button class="ml-1 text-zinc-400 hover:text-zinc-600" onclick="removeFile('${fileId}')" title="移除">&times;</button>
           `;
           
           // 保存解析结果
