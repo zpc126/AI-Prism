@@ -767,7 +767,11 @@ app.post('/api/canvas-chat', async (req, res) => {
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive'
   });
-  res.write(`event: progress\ndata: ${JSON.stringify({ message: '消息已收到，正在连接模型...' })}\n\n`);
+  const writeSse = (event, data) => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  writeSse('progress', { message: '消息已收到，正在连接模型...' });
 
   const { generateCasesStream } = require('./ai/generate');
 
@@ -788,11 +792,70 @@ app.post('/api/canvas-chat', async (req, res) => {
     `${item.role === 'assistant' ? 'Prism' : '用户'}：${String(item.content || '').slice(0, 300)}`
   ).join('\n');
 
+  const wantsConcreteChanges = /补一下|加一下|补充|补上|新增|生成|加点|添加|完善|落到导图|改导图|更新导图/.test(String(message));
+  const lastAssistant = [...(history || [])].reverse().find(item => item.role === 'assistant' && item.content);
+  const forbiddenModules = [...String(message).matchAll(/不在([^，。,. ]+)/g)].map(match => match[1]);
   const fullContent = `${historySummary ? `最近对话：\n${historySummary}\n\n` : ''}当前模块：${selectedCategory || '全部'}
 相关测试用例（仅供参考）：\n${caseSummary || '无'}
 
-用户最新消息：${message}`;
+用户最新消息：${message}
+${wantsConcreteChanges ? '\n执行要求：用户本轮要把内容落到导图，必须输出 ###CASE### 或 ###UPDATE###，不能只回复建议。' : ''}`;
   console.log(`[CanvasChat:${requestId}] 开始 model-context cases=${relevantCases.length}/${cases?.length || 0} history=${history?.length || 0} message=${String(message).slice(0, 80)}`);
+  const isForbiddenCategory = (name) => Boolean(name && forbiddenModules.some(item => name.includes(item) || item.includes(name)));
+  const inferFallbackCategory = () => {
+    const contextText = `${message}\n${lastAssistant?.content || ''}`;
+    const bracketCandidates = [...contextText.matchAll(/【([^】]{2,30})】/g)].map(match => match[1]);
+    const mentioned = relevantCases.find(item => item.category && contextText.includes(item.category));
+    const byHistory = relevantCases.find(item => item.category && String(lastAssistant?.content || '').includes(item.category));
+    const candidates = [
+      ...bracketCandidates,
+      mentioned?.category,
+      byHistory?.category,
+      selectedCategory,
+      relevantCases[0]?.category,
+      '未分类'
+    ].filter(Boolean);
+    return candidates.find(name => !isForbiddenCategory(name)) || '未分类';
+  };
+  const buildFallbackCasesFromReply = (replyText) => {
+    if (!wantsConcreteChanges || !replyText) return [];
+    const category = inferFallbackCategory();
+    if (isForbiddenCategory(category)) return [];
+    const parts = String(replyText)
+      .split(/(?:\d+[）.)、]|[；;。]\s*)/)
+      .map(item => item.replace(/^[-\s]+/, '').trim())
+      .filter(item => item.length >= 8)
+      .slice(0, 3);
+    return parts.map((text, index) => ({
+      category,
+      id: `AI-${Date.now()}-${index + 1}`,
+      title: text.slice(0, 36),
+      priority: index === 0 ? 'P1' : 'P2',
+      reason: '用户要求补充',
+      steps: [
+        '打开测试入口',
+        `进入${category}`,
+        `验证${text.slice(0, 48)}`
+      ],
+      expected: `${text.slice(0, 60)}展示或流转符合需求`
+    }));
+  };
+  const heartbeatMessages = [
+    '正在读取完整用例上下文...',
+    '正在等待模型生成回复...',
+    '模型仍在分析，结果出来会马上显示...',
+    '完整上下文较大，仍在处理中...'
+  ];
+  const heartbeatTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    const index = Math.min(heartbeatMessages.length - 1, Math.floor(elapsed / 8));
+    writeSse('progress', {
+      message: heartbeatMessages[index],
+      elapsed,
+      cases: relevantCases.length,
+      history: history?.length || 0
+    });
+  }, 2500);
 
   // 协作对话 prompt：先回复用户，再输出需要补充的用例
   const canvasChatPrompt = `你是 Prism，一个资深 QA 测试工程师，正在和用户一起协作完善测试用例。
@@ -802,6 +865,9 @@ app.post('/api/canvas-chat', async (req, res) => {
 2. 如果需要补充用例，用 ###CASE### 格式逐条输出新用例
 3. 如果用户要求修改已有用例，必须根据已有用例 id 输出 ###UPDATE###，直接修改原用例，禁止新增一条相似用例
 4. 如果用户只是闲聊或确认，只回复对话，不用输出用例
+5. 如果用户问“还差哪些、怎么看、建议补什么”，用 ###REPLY### 给出具体建议，可以列出建议项，但不要输出空内容
+6. 如果用户说“补一下、加一下、补充、把刚才说的补上、那你补、新增、添加、完善”，必须输出至少 1 条 ###CASE### 或 ###UPDATE###，不能只回复文字
+7. 如果用户说“不在某模块”，禁止放到该模块，要结合最近对话判断正确模块；如果无法判断，就放到最相关的现有模块并在 REPLY 里说明
 
 【修改已有用例格式】
 每条修改占一行，保留原用例 id，只填写要更新后的完整内容：
@@ -815,27 +881,64 @@ app.post('/api/canvas-chat', async (req, res) => {
 - reason 是你设计这条用例的思考，像同事间解释为什么需要测这个
 - 用户说“修改、改成、调整、替换、账号密码”等针对现有内容的要求时，优先 UPDATE，不要 CASE
 - 不要重复已有用例
-- 只输出需要补充的新用例
-- 对话回复只能放在 ###REPLY### 后面并单独占一行`;
+- 只输出需要补充的新用例；但用户明确要求“补/加/新增/完善”时，必须输出可落导图的 CASE 或 UPDATE
+- 对话回复只能放在 ###REPLY### 后面并单独占一行
+- 无论是否修改用例，都必须至少输出一行 ###REPLY###`;
 
   try {
+    let emittedMeaningfulEvent = false;
+    let emittedMutation = false;
+    let lastReplyText = '';
+    let latestComplete = null;
     await generateCasesStream(fullContent, (event, data) => {
       if (event === 'complete') {
+        latestComplete = data || null;
         recordModelUsage(fullContent, data);
+        return;
       }
       if (event === 'reply') {
+        emittedMeaningfulEvent = true;
+        lastReplyText = data.text || '';
         console.log(`[CanvasChat:${requestId}] 首条回复 ${Date.now() - startedAt}ms: ${String(data.text || '').slice(0, 120)}`);
       } else if (event === 'case') {
+        emittedMeaningfulEvent = true;
+        emittedMutation = true;
         console.log(`[CanvasChat:${requestId}] 新增用例: ${data.case?.title || data.case?.id || '未命名'}`);
       } else if (event === 'update') {
+        emittedMeaningfulEvent = true;
+        emittedMutation = true;
         console.log(`[CanvasChat:${requestId}] 修改用例: ${data.case?.id || '未知ID'} ${data.case?.title || ''}`);
       }
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      writeSse(event, data);
     }, canvasChatPrompt, { allowEmpty: true, maxTokens: 1200 });
+    if (wantsConcreteChanges && !emittedMutation) {
+      const fallbackCases = buildFallbackCasesFromReply(lastReplyText || latestComplete?.rawTextPreview || message);
+      fallbackCases.forEach(caseData => {
+        emittedMeaningfulEvent = true;
+        emittedMutation = true;
+        console.log(`[CanvasChat:${requestId}] 兜底生成用例: ${caseData.title}`);
+        writeSse('case', { case: caseData });
+      });
+      if (fallbackCases.length) {
+        writeSse('reply', { text: `已根据刚才的建议补充 ${fallbackCases.length} 条用例到「${fallbackCases[0].category}」。` });
+      }
+    }
+    if (!emittedMeaningfulEvent) {
+      const fallbackReply = '我收到了，但这次没有解析到可以直接应用到导图的修改，当前用例先保持不变。你可以再发一次，我会继续处理。';
+      console.log(`[CanvasChat:${requestId}] 空回复兜底 ${Date.now() - startedAt}ms`);
+      if (latestComplete?.rawTextPreview) {
+        console.log(`[CanvasChat:${requestId}] 模型原文预览: ${latestComplete.rawTextPreview.replace(/\s+/g, ' ').slice(0, 500)}`);
+      }
+      writeSse('reply', { text: fallbackReply });
+    }
+    writeSse('complete', { success: true });
     console.log(`[CanvasChat:${requestId}] 完成 ${Date.now() - startedAt}ms`);
   } catch (error) {
     console.error(`[CanvasChat:${requestId}] 失败 ${Date.now() - startedAt}ms:`, error.message);
-    res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
+    writeSse('error', { error: error.message });
+    writeSse('complete', { success: false });
+  } finally {
+    clearInterval(heartbeatTimer);
   }
 
   res.end();

@@ -161,6 +161,64 @@ function buildSystemPrompt() {
   return prompt;
 }
 
+function parseMarkedJsonObjects(text, marker) {
+  const objects = [];
+  let searchIndex = 0;
+  while (searchIndex < text.length) {
+    const markerIndex = text.indexOf(marker, searchIndex);
+    if (markerIndex === -1) break;
+
+    let index = markerIndex + marker.length;
+    while (index < text.length && /\s/.test(text[index])) index++;
+    if (text[index] !== '{') {
+      searchIndex = index + 1;
+      continue;
+    }
+
+    const start = index;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (; index < text.length; index++) {
+      const ch = text[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === '{') {
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          index++;
+          break;
+        }
+      }
+    }
+
+    if (depth === 0) {
+      const rawObject = text.slice(start, index);
+      try {
+        objects.push(JSON.parse(rawObject));
+      } catch (e) {
+        try {
+          objects.push(JSON.parse(jsonrepair(rawObject)));
+        } catch (repairError) {}
+      }
+    }
+    searchIndex = Math.max(index, start + 1);
+  }
+  return objects;
+}
+
 // OpenAI / 兼容接口
 async function callOpenAI(content, apiKey, baseUrl, model) {
   const baseURL = baseUrl || 'https://api.openai.com/v1';
@@ -401,6 +459,7 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
   let allCases = [];
   let analysisSent = false;
   let replySent = false;
+  const emittedCases = new Set();
   const emittedUpdates = new Set();
 
   onEvent('progress', { message: '正在分析需求...' });
@@ -470,8 +529,12 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
           if (before) {
             try {
               const caseData = JSON.parse(before);
-              allCases.push(caseData);
-              onEvent('case', { case: caseData, totalCases: allCases.length });
+              const caseKey = caseData.id || `${caseData.category || ''}:${caseData.title || ''}`;
+              if (!emittedCases.has(caseKey)) {
+                emittedCases.add(caseKey);
+                allCases.push(caseData);
+                onEvent('case', { case: caseData, totalCases: allCases.length });
+              }
             } catch (e) {
               // 上一条 JSON 不完整，跳过
             }
@@ -504,15 +567,20 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
       replySent = true;
     }
   }
-  for (const match of rawText.matchAll(/###UPDATE###\s*(\{[^\n]*\})/g)) {
-    try {
-      const updateData = JSON.parse(match[1]);
-      const updateKey = JSON.stringify(updateData);
-      if (updateData.id && !emittedUpdates.has(updateKey)) {
-        emittedUpdates.add(updateKey);
-        onEvent('update', { case: updateData });
-      }
-    } catch (e) {}
+  for (const updateData of parseMarkedJsonObjects(rawText, '###UPDATE###')) {
+    const updateKey = updateData.id || JSON.stringify(updateData);
+    if (updateData.id && !emittedUpdates.has(updateKey)) {
+      emittedUpdates.add(updateKey);
+      onEvent('update', { case: updateData });
+    }
+  }
+  for (const caseData of parseMarkedJsonObjects(rawText, '###CASE###')) {
+    const caseKey = caseData.id || `${caseData.category || ''}:${caseData.title || ''}`;
+    if (!emittedCases.has(caseKey)) {
+      emittedCases.add(caseKey);
+      allCases.push(caseData);
+      onEvent('case', { case: caseData, totalCases: allCases.length });
+    }
   }
   if (remaining && !remaining.includes('###UPDATE###')) {
     // 尝试从剩余内容中提取 JSON
@@ -520,8 +588,12 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
     if (jsonMatch) {
       try {
         const caseData = JSON.parse(jsonMatch[0]);
-        allCases.push(caseData);
-        onEvent('case', { case: caseData, totalCases: allCases.length });
+        const caseKey = caseData.id || `${caseData.category || ''}:${caseData.title || ''}`;
+        if (!emittedCases.has(caseKey)) {
+          emittedCases.add(caseKey);
+          allCases.push(caseData);
+          onEvent('case', { case: caseData, totalCases: allCases.length });
+        }
       } catch (e) {}
     }
   }
@@ -536,7 +608,7 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
   if (allCases.length === 0 && !options.allowEmpty) {
     throw new Error('模型响应中没有解析到测试用例');
   }
-  onEvent('complete', { categories: Object.values(catMap) });
+  onEvent('complete', { categories: Object.values(catMap), rawTextLength: rawText.length, rawTextPreview: rawText.slice(0, 800) });
 }
 
 // 通用 LLM 调用（用于碎片提取等）

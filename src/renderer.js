@@ -361,6 +361,7 @@ function applyCaseUpdate(updatedCase, { persist = true } = {}) {
 
   state.mindMap = buildMindMap(state.categories);
   state.canvas?.setMindMap(state.mindMap);
+  renderCanvasModuleNav(targetCategoryName);
   if (persist) {
     persistCurrentSession().catch(error => {
       console.error('保存用例修改失败:', error);
@@ -368,6 +369,15 @@ function applyCaseUpdate(updatedCase, { persist = true } = {}) {
     });
   }
   return true;
+}
+
+function persistCanvasChatChanges() {
+  state.mindMap = buildMindMap(state.categories);
+  renderCanvasModuleNav(state.selectedCategory);
+  persistCurrentSession().catch(error => {
+    console.error('保存对话调整失败:', error);
+    addIslandMessage('system', `对话调整未保存：${error.message}`);
+  });
 }
 
 function hasAnalysisInput() {
@@ -531,6 +541,7 @@ function switchView(viewName) {
   state.currentView = viewName;
   $$('.view').forEach(v => v.classList.remove('active'));
   $(`#view-${viewName}`).classList.add('active');
+  $('#canvas-module-nav')?.classList.toggle('hidden', viewName !== 'engine');
   
   if (viewName === 'engine' && !state.canvas) {
     state.canvas = new Canvas('canvas-container');
@@ -542,6 +553,7 @@ function switchView(viewName) {
       showEditCaseModal(node);
     };
   }
+  if (viewName === 'engine') renderCanvasModuleNav();
 }
 
 // ========== 视图 1: 输入 ==========
@@ -845,6 +857,7 @@ function initViewEngine() {
       state.canvas.clear();
       state.canvas = null;
     }
+    $('#canvas-module-nav')?.classList.add('hidden');
     state.thinkQueue = [];
     state.isThinking = false;
     switchView('input');
@@ -956,7 +969,7 @@ async function sendIslandMessage() {
   let replyShown = false;
   const categoryMap = {};
   const requestController = new AbortController();
-  const requestTimeout = setTimeout(() => requestController.abort(), 60000);
+  const requestTimeout = null;
   
   // 复制已有分类
   if (state.categories) {
@@ -986,6 +999,9 @@ async function sendIslandMessage() {
       signal: requestController.signal
     });
     
+    if (!response.ok || !response.body) {
+      throw new Error(`Canvas chat failed: ${response.status}`);
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -1017,6 +1033,7 @@ async function sendIslandMessage() {
               
               state.categories = Object.values(categoryMap);
               const newNode = state.canvas?.addCaseNode(catName, c);
+              renderCanvasModuleNav(catName);
               if (newNode) focusNewCaseNode(newNode);
               newCasesAdded++;
               
@@ -1036,6 +1053,16 @@ async function sendIslandMessage() {
                 casesUpdated++;
                 updateChatIslandStatus('analyzing', `已修改 ${casesUpdated} 条用例...`);
               }
+            } else if (currentEvent === 'progress') {
+              updateIslandThinking(
+                thinkingId,
+                payload.message || '模型正在处理',
+                payload.elapsed ? `已等待 ${payload.elapsed} 秒 · 完整上下文 ${payload.cases || allCases.length} 条用例` : '正在准备上下文'
+              );
+              updateChatIslandStatus('analyzing', payload.message || '模型正在处理');
+            } else if (currentEvent === 'complete') {
+              stopWaitingFeedback();
+              removeIslandThinking(thinkingId);
             }
           } catch (e) {}
         }
@@ -1052,6 +1079,7 @@ async function sendIslandMessage() {
     } else if (newCasesAdded > 0) {
       scoutReply = `收到！已补充 ${newCasesAdded} 条用例，你看看还需要调整吗？`;
       showDanmaku('协作', `新增 ${newCasesAdded} 条用例`);
+      persistCanvasChatChanges();
     } else {
       scoutReply = '收到，我来看看怎么调整...';
     }
@@ -1073,7 +1101,7 @@ async function sendIslandMessage() {
     updateChatIslandStatus('error', timedOut ? '响应超时' : '请求失败');
   } finally {
     stopWaitingFeedback();
-    clearTimeout(requestTimeout);
+    if (requestTimeout) clearTimeout(requestTimeout);
     if (sendButton) sendButton.disabled = false;
     input?.focus();
   }
@@ -2086,6 +2114,7 @@ function copyCases() {
     const status = state.canvas?.state.caseStatus[c.id];
     const statusStr = status === 'pass' ? ' [✓通过]' 
       : status === 'fail' ? ' [✗不通过]' 
+      : status === 'confirmed' ? ' [✦已确认]'
       : status === 'unconfirmed' ? ' [?未确认]'
       : status === 'pending' ? ' [⋯待确认]'
       : '';
@@ -2548,6 +2577,8 @@ async function startAnalysis() {
   
   switchView('engine');
   if (state.canvas) state.canvas.clear();
+  state.categories = [];
+  renderCanvasModuleNav();
   
   // 显示需求摘要
   const summary = state.requirement.length > 40 ? 
@@ -2655,6 +2686,7 @@ async function startAnalysis() {
                 
                 // 更新 state
                 state.categories = Object.values(categoryMap);
+                renderCanvasModuleNav(catName);
                 
                 // 弹幕排队显示
                 showDanmaku(catName, c);
@@ -2730,6 +2762,7 @@ async function startAnalysis() {
       // 不再重绘画布，因为已经在流式过程中增量更新了
       await sleep(50);
       state.canvas.fitToView();
+      renderCanvasModuleNav();
       
       // 更新状态栏
       if (engineStatus) engineStatus.textContent = '用例已就绪';
@@ -2956,7 +2989,7 @@ function showCanvasChat() {
     let replyShown = false;
     const categoryMap = {};
     const requestController = new AbortController();
-    const requestTimeout = setTimeout(() => requestController.abort(), 60000);
+    const requestTimeout = null;
     
     // 复制已有分类
     if (state.categories) {
@@ -2978,6 +3011,9 @@ function showCanvasChat() {
         signal: requestController.signal
       });
       
+      if (!response.ok || !response.body) {
+        throw new Error(`Canvas chat failed: ${response.status}`);
+      }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -3010,6 +3046,7 @@ function showCanvasChat() {
                 
                 state.categories = Object.values(categoryMap);
                 const newNode = state.canvas?.addCaseNode(catName, c);
+                renderCanvasModuleNav(catName);
                 if (newNode) focusNewCaseNode(newNode);
                 newCasesAdded++;
                 
@@ -3029,6 +3066,16 @@ function showCanvasChat() {
                   casesUpdated++;
                   updateChatIslandStatus('analyzing', `已修改 ${casesUpdated} 条用例...`);
                 }
+              } else if (currentEvent === 'progress') {
+                updateIslandThinking(
+                  thinkingId,
+                  payload.message || '模型正在处理',
+                  payload.elapsed ? `已等待 ${payload.elapsed} 秒 · 完整上下文 ${payload.cases || allCases.length} 条用例` : '正在准备上下文'
+                );
+                updateChatIslandStatus('analyzing', payload.message || '模型正在处理');
+              } else if (currentEvent === 'complete') {
+                stopWaitingFeedback();
+                removeIslandThinking(thinkingId);
               }
             } catch (e) {}
           }
@@ -3046,6 +3093,7 @@ function showCanvasChat() {
         scoutReply = `收到！已补充 ${newCasesAdded} 条用例，你看看还需要调整吗？`;
         // 弹幕提示新用例
         showDanmaku('协作', `新增 ${newCasesAdded} 条用例`);
+        persistCanvasChatChanges();
       } else {
         scoutReply = '好的，我理解你的意思了。还有什么需要调整的吗？';
       }
@@ -3063,11 +3111,10 @@ function showCanvasChat() {
       saveChatMessage('assistant', errorReply);
     } finally {
       stopWaitingFeedback();
-      clearTimeout(requestTimeout);
+      if (requestTimeout) clearTimeout(requestTimeout);
+      isChatting = false;
+      updateChatIslandStatus('ready', '可协作调整');
     }
-    
-    isChatting = false;
-    updateChatIslandStatus('ready', '可协作调整');
   }
   
   // 绑定事件（避免重复绑定）
@@ -3100,6 +3147,7 @@ function addIslandThinking() {
       <div class="island-thinking-copy">
         <strong class="island-thinking-label">正在理解你的调整</strong>
         <small class="island-thinking-time">刚刚开始</small>
+        <div class="island-thinking-progress"><span></span></div>
       </div>
       <div class="island-thinking-dots"><span></span><span></span><span></span></div>
     </div>
@@ -3126,9 +3174,11 @@ function startIslandThinkingFeedback(thinkingId) {
     const thinking = document.getElementById(thinkingId);
     const label = thinking?.querySelector('.island-thinking-label');
     const time = thinking?.querySelector('.island-thinking-time');
-    if (label) label.textContent = phase.label;
-    if (time) time.textContent = seconds < 1 ? '刚刚开始' : `已等待 ${seconds} 秒`;
-    updateChatIslandStatus('analyzing', phase.status);
+    const progress = thinking?.querySelector('.island-thinking-progress span');
+    if (label) label.textContent = thinking?.dataset.label || phase.label;
+    if (time) time.textContent = thinking?.dataset.detail || (seconds < 1 ? '刚刚开始' : `已等待 ${seconds} 秒`);
+    if (progress) progress.style.width = `${Math.min(92, 10 + seconds * 4)}%`;
+    updateChatIslandStatus('analyzing', thinking?.dataset.status || phase.status);
   };
 
   update();
@@ -3138,6 +3188,18 @@ function startIslandThinkingFeedback(thinkingId) {
     stopped = true;
     clearInterval(timer);
   };
+}
+
+function updateIslandThinking(thinkingId, label, detail) {
+  const thinking = document.getElementById(thinkingId);
+  if (!thinking) return;
+  if (label) thinking.dataset.label = label;
+  if (label) thinking.dataset.status = label;
+  if (detail) thinking.dataset.detail = detail;
+  const labelEl = thinking.querySelector('.island-thinking-label');
+  const detailEl = thinking.querySelector('.island-thinking-time');
+  if (labelEl && label) labelEl.textContent = label;
+  if (detailEl && detail) detailEl.textContent = detail;
 }
 
 // 移除灵动岛思考状态
@@ -3420,13 +3482,13 @@ function transitionToCanvas(callback) {
 // ========== 新用例聚焦效果 ==========
 function focusNewCaseNode(nodeElement) {
   if (!nodeElement) return;
-  
+
   // 添加聚焦动画类
   nodeElement.classList.add('node-focus-new');
-  
-  // 滚动到可视区域
-  nodeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  
+
+  // 在画布内部平移到新节点，避免触发外层滚动导致整体界面不可滑动
+  state.canvas?.focusNode?.(nodeElement);
+
   // 2 秒后移除聚焦效果
   setTimeout(() => {
     nodeElement.classList.remove('node-focus-new');
@@ -4389,6 +4451,8 @@ function showEditCaseModal(node) {
 async function startBugRegression() {
   switchView('engine');
   if (state.canvas) state.canvas.clear();
+  state.categories = [];
+  renderCanvasModuleNav();
   
   const chatArea = $('#scout-chat');
   if (chatArea) chatArea.innerHTML = '';
@@ -4455,6 +4519,7 @@ async function startBugRegression() {
               }
               categoryMap[catName].cases.push(c);
               state.categories = Object.values(categoryMap);
+              renderCanvasModuleNav(catName);
               
               showDanmaku(catName, c);
               const newNode = state.canvas?.addCaseNode(catName, c);
@@ -4468,6 +4533,7 @@ async function startBugRegression() {
     stopThinkingProcess();
     stopDanmaku();
     state.mindMap = buildMindMap(state.categories);
+    renderCanvasModuleNav();
     
     const totalCases = state.categories.reduce((sum, cat) => sum + (cat.cases?.length || 0), 0);
     
@@ -4957,6 +5023,7 @@ async function generateCasesOnCanvas() {
   
   // 设置思维导图
   state.canvas.setMindMap(state.mindMap);
+  renderCanvasModuleNav();
   
   // 隐藏所有节点
   const allNodes = document.querySelectorAll('.mind-node');
@@ -5035,6 +5102,61 @@ async function generateCasesOnCanvas() {
 
 
 // ========== 思维导图 ==========
+function getCanvasCategoryNode(categoryName) {
+  const children = state.canvas?.state?.tree?.children || state.mindMap?.children || [];
+  return children.find(node => node.title === categoryName);
+}
+
+function renderCanvasModuleNav(activeName = state.selectedCategory) {
+  const nav = $('#canvas-module-nav');
+  const list = $('#canvas-module-nav-list');
+  const countEl = $('#canvas-module-nav-count');
+  if (!nav || !list) return;
+
+  const categories = (state.categories || [])
+    .filter(category => (category.cases || []).length > 0)
+    .map(category => ({
+      name: category.name || category.type || '未分类',
+      count: category.cases?.length || 0
+    }));
+
+  nav.classList.toggle('hidden', state.currentView !== 'engine' || categories.length === 0);
+  if (countEl) countEl.textContent = `${categories.length} 个模块`;
+
+  list.innerHTML = categories.map(category => `
+    <button class="canvas-module-nav-item ${category.name === activeName ? 'active' : ''}" type="button" data-category="${escapeHtml(category.name)}" title="${escapeHtml(category.name)}">
+      <span class="canvas-module-nav-title">${escapeHtml(category.name)}</span>
+      <span class="canvas-module-nav-badge">${category.count}</span>
+    </button>
+  `).join('');
+
+  list.querySelectorAll('.canvas-module-nav-item').forEach(button => {
+    button.addEventListener('click', () => {
+      const categoryName = button.dataset.category;
+      focusCanvasModule(categoryName);
+    });
+  });
+}
+
+function focusCanvasModule(categoryName) {
+  if (!categoryName) return;
+  state.selectedCategory = categoryName;
+  renderCanvasModuleNav(categoryName);
+  const node = getCanvasCategoryNode(categoryName);
+  if (node && state.canvas?.focusNodeById?.(node.id, { scale: 1.2 })) {
+    updateChatIslandStatus('ready', `已定位到 ${categoryName}`);
+    return;
+  }
+
+  const fallbackNode = Array.from(document.querySelectorAll('.mind-node'))
+    .find(el => el.textContent?.trim() === categoryName);
+  if (fallbackNode) {
+    state.canvas?.focusNode?.(fallbackNode);
+    fallbackNode.classList.add('mind-node-active');
+    updateChatIslandStatus('ready', `已定位到 ${categoryName}`);
+  }
+}
+
 function buildMindMap(categories) {
   const genId = () => Math.random().toString(36).substr(2, 9);
   
@@ -5136,6 +5258,7 @@ async function executeCases(cases) {
       state.mindMap = buildMindMap(state.categories);
       state.canvas.setMindMap(state.mindMap);
       state.canvas.fitToView();
+      renderCanvasModuleNav();
     } else {
       throw new Error(data.error);
     }
@@ -5431,6 +5554,7 @@ function loadSession(session) {
     state.mindMap = buildMindMap(state.categories);
     state.canvas.setMindMap(state.mindMap);
     state.canvas.fitToView();
+    renderCanvasModuleNav();
     
     // 隐藏引擎中心
     const engineCenter = $('#engine-center');

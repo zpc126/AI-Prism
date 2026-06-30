@@ -19,7 +19,7 @@ class Canvas {
       spacePressed: false,
       tree: null,
       nodePositions: new Map(),
-      caseStatus: {} // 用例状态：{ nodeId: 'pass' | 'fail' | undefined }
+      caseStatus: this.loadCaseStatus() // 用例状态：{ nodeId: 'pass' | 'fail' | 'confirmed' | 'unconfirmed' | 'pending' }
     };
 
     // 配置
@@ -371,6 +371,8 @@ class Canvas {
         ? '<span class="case-status case-pass">✓</span>' 
         : status === 'fail' 
         ? '<span class="case-status case-fail">✗</span>' 
+        : status === 'confirmed'
+        ? '<span class="case-status case-confirmed">✦</span>'
         : status === 'unconfirmed'
         ? '<span class="case-status case-unconfirmed">?</span>'
         : status === 'pending'
@@ -419,10 +421,77 @@ class Canvas {
         delete this.state.caseStatus[nodeId];
       }
     }
+    this.persistCaseStatus();
     this.renderAll();
     this.updateCaseCount();
   }
-  
+
+  loadCaseStatus() {
+    try {
+      const raw = localStorage.getItem('prism.caseStatus');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  persistCaseStatus() {
+    try {
+      localStorage.setItem('prism.caseStatus', JSON.stringify(this.state.caseStatus));
+    } catch (_) {}
+  }
+
+  // 平移画布让指定节点居中显示，避免使用浏览器 scrollIntoView 影响外层滚动
+  focusNode(nodeEl) {
+    if (!nodeEl || !this.container || !this.canvasContent) return;
+    const containerRect = this.container.getBoundingClientRect();
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const dx = containerRect.left + containerRect.width / 2 - (nodeRect.left + nodeRect.width / 2);
+    const dy = containerRect.top + containerRect.height / 2 - (nodeRect.top + nodeRect.height / 2);
+    this.state.offsetX += dx;
+    this.state.offsetY += dy;
+    this.canvasContent.style.transition = 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)';
+    this.updateTransform();
+    setTimeout(() => {
+      if (this.canvasContent) this.canvasContent.style.transition = '';
+    }, 400);
+  }
+
+  focusNodeById(nodeId, { scale = 1.18 } = {}) {
+    if (!nodeId || !this.canvasContent) return false;
+    const safeNodeId = typeof CSS !== 'undefined' && CSS.escape
+      ? CSS.escape(String(nodeId))
+      : String(nodeId).replace(/"/g, '\\"');
+    const nodeEl = this.canvasContent.querySelector(`.mind-node[data-id="${safeNodeId}"]`);
+    if (!nodeEl) return false;
+    const pos = this.state.nodePositions.get(nodeId);
+    if (!pos || !this.container) {
+      this.focusNode(nodeEl);
+      return true;
+    }
+
+    const nextScale = Math.max(this.config.minScale, Math.min(this.config.maxScale, scale));
+    const targetX = this.container.clientWidth * 0.58;
+    const targetY = this.container.clientHeight * 0.5;
+    this.state.scale = nextScale;
+    this.state.offsetX = targetX - (pos.x + pos.width / 2) * nextScale;
+    this.state.offsetY = targetY - pos.y * nextScale;
+    this.canvasContent.style.transition = 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)';
+    this.updateTransform();
+    setTimeout(() => {
+      if (this.canvasContent) this.canvasContent.style.transition = '';
+    }, 400);
+    this.canvasContent.querySelectorAll('.mind-node-active').forEach(el => {
+      el.classList.remove('mind-node-active');
+      el.style.zIndex = '';
+    });
+    nodeEl.classList.add('mind-node-active');
+    nodeEl.style.zIndex = '260';
+    return true;
+  }
+	  
   // 显示操作栏
   showActionBar(el, node) {
     // 移除已有的操作栏
@@ -439,6 +508,7 @@ class Canvas {
     bar.innerHTML = `
       <button class="action-btn action-pass" data-status="pass">✓ Pass</button>
       <button class="action-btn action-fail" data-status="fail">✗ Fail</button>
+      <button class="action-btn action-confirmed" data-status="confirmed">✦ 已确认</button>
       <button class="action-btn action-unconfirmed" data-status="unconfirmed">? 未确认</button>
       <button class="action-btn action-pending" data-status="pending">⋯ 待确认</button>
       <button class="action-btn action-run" data-action="run">▶ 自动执行</button>
