@@ -7,6 +7,11 @@ const path = require('path');
 const { jsonrepair } = require('jsonrepair');
 const { getLLMConfig } = require('../config');
 
+const DEFAULT_TEXT_MAX_OUTPUT_TOKENS = 64000;
+const DEFAULT_ANALYSIS_MAX_OUTPUT_TOKENS = 64000;
+const DEFAULT_VISION_MAX_OUTPUT_TOKENS = 16000;
+const VISION_AUX_CONTEXT_BUDGET = 30000;
+
 function getChatCompletionsUrl(baseUrl, requestUrl) {
   const manual = String(requestUrl || '').trim();
   if (manual) return manual;
@@ -63,6 +68,79 @@ function parseImageDataUrl(imageBase64) {
     mediaType: 'image/png',
     data: value.replace(/\s/g, '')
   };
+}
+
+function normalizeVisionFiles(visionFiles = []) {
+  if (!Array.isArray(visionFiles)) return [];
+  return visionFiles
+    .map((file, index) => ({
+      imageBase64: file.imageBase64 || file.base64 || '',
+      filename: String(file.filename || file.name || `图片${index + 1}`).trim(),
+      sourceType: String(file.sourceType || file.visionSource || file.type || '').trim(),
+      contextText: String(file.contextText || file.textFallback || file.text || '').trim()
+    }))
+    .filter(file => file.imageBase64);
+}
+
+function fitAuxiliaryText(text, budget) {
+  const value = String(text || '');
+  if (!value || budget <= 0) return '';
+  if (value.length <= budget) return value;
+  const head = Math.max(0, Math.floor(budget * 0.7));
+  const tail = Math.max(0, budget - head);
+  return `${value.slice(0, head)}\n\n【辅助文本过长，中间部分已省略；图片原文仍由模型直接读取】\n\n${value.slice(-tail)}`;
+}
+
+function buildVisionUserContent(provider, textContent, visionFiles = []) {
+  const files = normalizeVisionFiles(visionFiles);
+  if (!files.length) return textContent;
+
+  const textParts = [
+    textContent,
+    '【视觉材料说明】以下图片/原型截图与上面的文字需求属于同一次需求输入，请把提示词、文字需求、图片内容和辅助文本一起理解；不要先 OCR 后二次总结。图片中的页面标题、模块层级、字段、按钮、表格、状态、业务文案优先级最高。'
+  ];
+
+  let remainingAuxBudget = VISION_AUX_CONTEXT_BUDGET;
+  files.forEach((file, index) => {
+    const meta = [
+      `图片${index + 1}`,
+      file.filename && `文件名：${file.filename}`,
+      file.sourceType && `来源：${file.sourceType}`
+    ].filter(Boolean).join(' / ');
+    textParts.push(`【${meta}】`);
+    const budgetForFile = files.length > 0 ? Math.floor(remainingAuxBudget / Math.max(1, files.length - index)) : 0;
+    const auxiliaryText = fitAuxiliaryText(file.contextText, budgetForFile);
+    remainingAuxBudget -= auxiliaryText.length;
+    if (auxiliaryText) {
+      textParts.push(`辅助文本（仅辅助理解，最终以图片可见内容为准）：\n${auxiliaryText}`);
+    }
+  });
+
+  const text = textParts.filter(Boolean).join('\n\n');
+  if (provider === 'anthropic') {
+    return [
+      { type: 'text', text },
+      ...files.map(file => {
+        const image = parseImageDataUrl(file.imageBase64);
+        return {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: image.mediaType,
+            data: image.data
+          }
+        };
+      })
+    ];
+  }
+
+  return [
+    { type: 'text', text },
+    ...files.map(file => ({
+      type: 'image_url',
+      image_url: { url: file.imageBase64 }
+    }))
+  ];
 }
 
 function pickApiErrorMessage(data, rawText, fallback = 'API 调用失败') {
@@ -193,6 +271,7 @@ async function callConfiguredLLMText(systemPrompt, userContent, options = {}) {
   const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
   const temperature = options.temperature ?? 0.3;
   const label = options.label || '模型调用';
+  const multimodalContent = buildVisionUserContent(provider, userContent, options.visionFiles);
   let requestEndpoint;
   let protocol = 'openai';
   let headers;
@@ -204,9 +283,9 @@ async function callConfiguredLLMText(systemPrompt, userContent, options = {}) {
     headers = buildAnthropicHeaders(llmConfig.apiKey);
     body = {
       model,
-      max_tokens: options.maxTokens || 4096,
+      max_tokens: options.maxTokens || DEFAULT_TEXT_MAX_OUTPUT_TOKENS,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userContent }],
+      messages: [{ role: 'user', content: multimodalContent }],
       temperature
     };
     if (options.stream) body.stream = true;
@@ -220,7 +299,7 @@ async function callConfiguredLLMText(systemPrompt, userContent, options = {}) {
     body = {
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent }
+        { role: 'user', content: multimodalContent }
       ],
       temperature
     };
@@ -234,7 +313,7 @@ async function callConfiguredLLMText(systemPrompt, userContent, options = {}) {
       model,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent }
+        { role: 'user', content: multimodalContent }
       ],
       temperature
     };
@@ -248,6 +327,24 @@ async function callConfiguredLLMText(systemPrompt, userContent, options = {}) {
     signal: options.signal,
     body: JSON.stringify(body)
   });
+
+  if (response.status === 413 && Array.isArray(options.visionFiles) && options.visionFiles.length > 0) {
+    if (!options.skipVisionContextRetry) {
+      console.warn(`[LLM] ${label} 请求体过大，保留图片并去掉视觉辅助文本后重试`);
+      const compactVisionFiles = options.visionFiles.map(file => ({
+        ...file,
+        contextText: '',
+        textFallback: '',
+        text: ''
+      }));
+      return callConfiguredLLMText(systemPrompt, userContent, {
+        ...options,
+        visionFiles: compactVisionFiles,
+        skipVisionContextRetry: true
+      });
+    }
+    throw new Error(`${label}失败(413)：模型网关限制请求体大小。已去掉 HTML 辅助文本后仍然过大，请减少一次上传的图片数量，或提高模型网关 nginx client_max_body_size。`);
+  }
 
   if (options.stream) {
     return readStreamTextResponse(response, requestEndpoint, label, protocol, llmConfig, options.onToken);
@@ -325,56 +422,291 @@ const SYSTEM_PROMPT = `你是 QA 测试工程师。根据需求生成可自动�
 1. 每条用例必须以 ###CASE### 开头，紧跟 JSON，无换行
 2. 每个模块至少 3 条用例
 3. reason 要真诚自然，不要用“核心链路”“关键场景”这类套话
-4. 不要输出任何 ###CASE### 之外的文字`
+4. 不要输出任何 ###CASE### 之外的文字
+5. 如果用户上传了多张图片/原型截图，必须逐张覆盖：每张图片至少生成 3 条用例；字段、按钮、表格、状态较多的页面至少生成 5-8 条用例。不要把多张图概括成少量总用例。
+6. 多图场景下，source 必须写明来自哪张图片或文件名，便于用户追溯。`
 
-// 解析 JSON 响应
-function parseJsonResponse(text) {
-  // 清理文本，提取可能的 JSON
-  let cleaned = text.trim();
-  
-  // 移除 markdown 代码块
-  cleaned = cleaned.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '');
-  
-  // 尝试直接解析
-  try {
-    const result = JSON.parse(cleaned);
-    if (result.categories) return result.categories;
-    if (Array.isArray(result)) return result;
-  } catch (e) {
-    console.log('直接解析失败，尝试修复...');
+function normalizeCaseData(caseData = {}, index = 0) {
+  const title = String(caseData.title || caseData.name || caseData.caseName || '').trim();
+  if (!title) return null;
+  const steps = Array.isArray(caseData.steps)
+    ? caseData.steps.map(step => String(step || '').trim()).filter(Boolean)
+    : String(caseData.steps || '').split(/\n|；|;/).map(step => step.trim()).filter(Boolean);
+  return {
+    category: String(caseData.category || caseData.module || caseData.moduleName || caseData.type || '未分类').trim() || '未分类',
+    id: String(caseData.id || caseData.caseId || `AI-${Date.now()}-${index + 1}`),
+    title,
+    priority: caseData.priority || 'P1',
+    reason: caseData.reason || caseData.source || '模型生成',
+    source: caseData.source || '',
+    steps: steps.length ? steps : ['打开测试入口', `验证${title}`],
+    expected: String(caseData.expected || caseData.expect || caseData.result || '结果符合需求').trim()
+  };
+}
+
+function groupCasesByCategory(cases = []) {
+  const catMap = {};
+  cases.map(normalizeCaseData).filter(Boolean).forEach(caseData => {
+    const catName = caseData.category || '未分类';
+    if (!catMap[catName]) catMap[catName] = { type: catName, name: catName, cases: [] };
+    catMap[catName].cases.push(caseData);
+  });
+  return Object.values(catMap);
+}
+
+function flattenCategories(categories = []) {
+  const cases = [];
+  (categories || []).forEach(category => {
+    (category.cases || []).forEach(caseData => {
+      const normalized = normalizeCaseData({
+        ...caseData,
+        category: caseData.category || category.name || category.type
+      }, cases.length);
+      if (normalized) cases.push(normalized);
+    });
+  });
+  return cases;
+}
+
+function sanitizeCaseId(value) {
+  return String(value || '')
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+}
+
+function stampVisionCase(caseData, file, imageIndex, totalImages, usedIds) {
+  const normalized = normalizeCaseData(caseData, usedIds.size);
+  if (!normalized) return null;
+  const sourcePrefix = `图片${imageIndex + 1}/${totalImages}${file.filename ? `：${file.filename}` : ''}`;
+  if (!String(normalized.source || '').includes(sourcePrefix)) {
+    normalized.source = normalized.source
+      ? `${sourcePrefix}；${normalized.source}`
+      : sourcePrefix;
   }
-  
-  // 尝试提取 JSON 对象
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
+  const rawId = sanitizeCaseId(normalized.id || normalized.title || `${imageIndex + 1}-${usedIds.size + 1}`);
+  const baseId = `IMG${imageIndex + 1}-${rawId || usedIds.size + 1}`;
+  let id = baseId;
+  let suffix = 2;
+  while (usedIds.has(id)) {
+    id = `${baseId}-${suffix++}`;
+  }
+  normalized.id = id;
+  usedIds.add(id);
+  return normalized;
+}
+
+function buildVisionFileFocusContent(content, file, imageIndex, totalImages) {
+  const sourceName = file.filename || `图片${imageIndex + 1}`;
+  return [
+    content,
+    `【当前图片处理要求】这是多图需求中的第 ${imageIndex + 1}/${totalImages} 张：${sourceName}`,
+    '本次只围绕当前这张图片生成用例，必须覆盖图片中可见的页面标题、模块、字段、按钮、表格、状态、提示文案和业务规则。',
+    '当前图片至少生成 3 条用例；如果页面包含多个按钮/字段/状态/列表操作，生成 5-8 条用例。',
+    `每条用例的 source 必须包含：图片${imageIndex + 1}/${totalImages}${file.filename ? `：${file.filename}` : ''}`,
+    '不要只输出模块分析，必须输出可落到导图的 ###CASE### 用例。'
+  ].filter(Boolean).join('\n\n');
+}
+
+function buildVisionAnalysisFocusContent(content, file, imageIndex, totalImages) {
+  const sourceName = file.filename || `图片${imageIndex + 1}`;
+  return [
+    content,
+    `【当前图片分析要求】这是多图需求中的第 ${imageIndex + 1}/${totalImages} 张：${sourceName}`,
+    '本次只分析当前这张图片，不要概括其它图片，不要因为还有其它图片就省略当前页面细节。',
+    '必须抽取当前图片可见的页面/模块、字段、按钮、表格、状态、流程、规则、风险和待确认问题。',
+    '如果图片信息丰富，modules、risks、questions、testStrategy 都要尽量具体。',
+    `所有风险、问题或策略条目中如有 source/来源 字段，必须标明：图片${imageIndex + 1}/${totalImages}${file.filename ? `：${file.filename}` : ''}`
+  ].filter(Boolean).join('\n\n');
+}
+
+function buildCaseReviewSummary(cases = []) {
+  return cases.map((caseData, index) => ({
+    index: index + 1,
+    id: caseData.id,
+    category: caseData.category,
+    title: caseData.title,
+    source: caseData.source,
+    steps: caseData.steps,
+    expected: caseData.expected
+  }));
+}
+
+function buildAnalysisReviewSummary(categories = []) {
+  const report = mergeAnalysisCategories(categories, 0)[0] || {};
+  return {
+    summary: report.summary,
+    modules: report.modules,
+    questions: report.questions,
+    acceptance: report.acceptance,
+    testStrategy: report.testStrategy,
+    risks: (report.cases || []).map(item => ({
+      category: item.category,
+      title: item.title,
+      priority: item.priority,
+      detail: Array.isArray(item.steps) ? item.steps.join('；') : item.steps,
+      expected: item.expected,
+      source: item.source
+    }))
+  };
+}
+
+function uniqueByText(items = [], getText = item => JSON.stringify(item)) {
+  const seen = new Set();
+  const result = [];
+  items.forEach(item => {
+    const key = String(getText(item) || '').trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    result.push(item);
+  });
+  return result;
+}
+
+function mergeAnalysisCategories(categories = [], totalImages = 0) {
+  const reports = categories
+    .filter(category => category && category.type === 'analysis')
+    .map(category => ({
+      summary: category.summary || '',
+      modules: Array.isArray(category.modules) ? category.modules : [],
+      testScope: category.testScope || { inScope: [], outOfScope: [] },
+      questions: Array.isArray(category.questions) ? category.questions : [],
+      acceptance: Array.isArray(category.acceptance) ? category.acceptance : [],
+      testStrategy: Array.isArray(category.testStrategy) ? category.testStrategy : [],
+      cases: Array.isArray(category.cases) ? category.cases : []
+    }));
+
+  const modules = uniqueByText(reports.flatMap(report => report.modules), item => {
+    if (typeof item === 'string') return item;
+    return item.name || item.module || item.title || JSON.stringify(item);
+  });
+  const inScope = uniqueByText(reports.flatMap(report => report.testScope?.inScope || []), item => typeof item === 'string' ? item : JSON.stringify(item));
+  const outOfScope = uniqueByText(reports.flatMap(report => report.testScope?.outOfScope || []), item => typeof item === 'string' ? item : JSON.stringify(item));
+  const questions = uniqueByText(reports.flatMap(report => report.questions || []), item => typeof item === 'string' ? item : item.title || item.question || JSON.stringify(item));
+  const acceptance = uniqueByText(reports.flatMap(report => report.acceptance || []), item => typeof item === 'string' ? item : JSON.stringify(item));
+  const testStrategy = uniqueByText(reports.flatMap(report => report.testStrategy || []), item => typeof item === 'string' ? item : JSON.stringify(item));
+  const cases = uniqueByText(reports.flatMap(report => report.cases || []), item => `${item.category || ''}:${item.title || ''}:${item.steps?.[0] || ''}`)
+    .map((caseData, index) => ({
+      ...caseData,
+      id: caseData.id || `analysis-${index + 1}`
+    }));
+
+  return [{
+    type: 'analysis',
+    name: '需求分析',
+    summary: totalImages > 1
+      ? `已按 ${totalImages} 张图片逐张完成需求分析，合并整理为模块、风险、待确认问题和测试策略。`
+      : reports[0]?.summary || '已完成需求分析。',
+    modules,
+    testScope: { inScope, outOfScope },
+    questions,
+    acceptance,
+    testStrategy,
+    cases
+  }];
+}
+
+function normalizeCategoryResult(result) {
+  if (!result) return [];
+  const categories = Array.isArray(result.categories) ? result.categories : result;
+  if (!Array.isArray(categories)) return [];
+
+  const looksLikeCaseArray = categories.some(item => item && (item.title || item.caseName) && (item.steps || item.expected || item.expect));
+  if (looksLikeCaseArray) {
+    return groupCasesByCategory(categories);
+  }
+
+  return categories.map((category, index) => {
+    const name = category.name || category.type || category.category || category.module || `模块${index + 1}`;
+    const cases = Array.isArray(category.cases)
+      ? category.cases.map((caseData, caseIndex) => normalizeCaseData({ ...caseData, category: caseData.category || name }, caseIndex)).filter(Boolean)
+      : [];
+    return { type: name, name, cases };
+  }).filter(category => category.cases.length > 0);
+}
+
+function parseCategoriesFromModelText(text) {
+  const markedCases = parseMarkedJsonObjects(text, '###CASE###');
+  const markedCategories = groupCasesByCategory(markedCases);
+  if (markedCategories.length) return markedCategories;
+
+  let cleaned = String(text || '').trim()
+    .replace(/^```(?:json)?\s*/m, '')
+    .replace(/\s*```$/m, '');
+
+  const tryParse = (candidate) => {
+    if (!candidate) return [];
     try {
-      // 修复常见的 JSON 问题
-      let jsonStr = jsonMatch[0]
-        .replace(/,\s*}/g, '}')  // 移除对象末尾的逗号
-        .replace(/,\s*]/g, ']')  // 移除数组末尾的逗号
-        .replace(/\n/g, ' ')     // 移除换行
-        .replace(/\t/g, ' ');    // 移除制表符
-      
-      const result = JSON.parse(jsonStr);
-      if (result.categories) return result.categories;
-      if (Array.isArray(result)) return result;
+      return normalizeCategoryResult(JSON.parse(candidate));
     } catch (e) {
-      console.log('JSON 修复失败:', e.message);
+      try {
+        return normalizeCategoryResult(JSON.parse(jsonrepair(candidate)));
+      } catch (repairError) {
+        return [];
+      }
     }
-  }
-  
-  // 最后尝试：提取数组
+  };
+
+  let categories = tryParse(cleaned);
+  if (categories.length) return categories;
+
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  categories = tryParse(jsonMatch?.[0]);
+  if (categories.length) return categories;
+
   const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-  if (arrayMatch) {
+  categories = tryParse(arrayMatch?.[0]);
+  if (categories.length) return categories;
+
+  const looseCases = [];
+  for (const objectText of cleaned.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g) || []) {
     try {
-      const result = JSON.parse(arrayMatch[0]);
-      if (Array.isArray(result)) return result;
+      const parsed = JSON.parse(jsonrepair(objectText));
+      if (parsed && (parsed.title || parsed.caseName) && (parsed.steps || parsed.expected || parsed.expect)) {
+        looseCases.push(parsed);
+      }
     } catch (e) {}
   }
-  
-  // 如果所有尝试都失败，返回示例数据
+  return groupCasesByCategory(looseCases);
+}
+
+// 解析 JSON/标记协议响应
+function parseJsonResponse(text) {
+  const categories = parseCategoriesFromModelText(text);
+  if (categories.length) return categories;
   console.log('无法解析 LLM 返回，使用示例数据');
   return generateMockCategories('');
+}
+
+async function generateGlobalFlowCases(content, allCases, totalImages, options = {}) {
+  if (!allCases.length || options.disableGlobalReview) return [];
+  const summary = buildCaseReviewSummary(allCases);
+  const prompt = `${buildSystemPrompt()}
+
+【全局复盘任务】
+你已经看到 ${totalImages} 张图片逐张生成出来的页面级用例。现在不要重复已有页面用例，只补充跨页面、跨模块、跨端、状态流转、数据一致性、权限与回归影响用例。
+
+必须关注：
+1. 多张图片之间是否构成完整业务流程
+2. Web 后台与手机/小程序/H5 是否有前后依赖
+3. 创建、审核、状态变更、查询、售后、质检、退款等链路是否需要串起来
+4. 页面级用例覆盖不到的端到端场景
+5. 不要重复已有 title 或只换说法
+
+输出仍然只使用 ###CASE###，每条一行。source 写“全局流程复盘”。`;
+
+  const userContent = [
+    `原始需求：\n${content}`,
+    `已生成用例摘要：\n${JSON.stringify(summary, null, 2)}`
+  ].join('\n\n');
+
+  const contentText = await callConfiguredLLMText(prompt, userContent, {
+    label: '全局流程补充用例模型调用',
+    temperature: 0.2
+  });
+  const categories = parseCategoriesFromModelText(contentText);
+  return flattenCategories(categories);
 }
 
 // 读取 .scout 配置
@@ -538,7 +870,7 @@ async function callAnthropic(content, apiKey, model, baseUrl = '', requestUrl = 
     },
     body: JSON.stringify({
       model: model || 'claude-3-sonnet-20240229',
-      max_tokens: 4096,
+      max_tokens: DEFAULT_TEXT_MAX_OUTPUT_TOKENS,
       system: systemPrompt,
       messages: [{ role: 'user', content: `需求：\n${content}` }]
     })
@@ -561,7 +893,8 @@ async function callAnthropic(content, apiKey, model, baseUrl = '', requestUrl = 
 }
 
 // 主函数
-async function generateCases(content) {
+async function generateCases(content, options = {}) {
+  if (!options || typeof options !== 'object') options = {};
   const llmConfig = getLLMConfig();
   const provider = llmConfig.provider;
   console.log(`LLM 提供商: ${provider}`);
@@ -572,14 +905,57 @@ async function generateCases(content) {
       return generateMockCategories(content);
     }
 
+    const visionFiles = normalizeVisionFiles(options.visionFiles);
+    if (visionFiles.length > 1 && !options.disableVisionBatching) {
+      console.log(`[Vision] 普通生成按图片逐张处理：${visionFiles.length} 张`);
+      const allCases = [];
+      const usedIds = new Set();
+      for (let index = 0; index < visionFiles.length; index++) {
+        const file = visionFiles[index];
+        try {
+          const batchContent = buildVisionFileFocusContent(content, file, index, visionFiles.length);
+          const categories = await generateCases(batchContent, {
+            ...options,
+            visionFiles: [file],
+            disableVisionBatching: true,
+            disableMockOnError: true
+          });
+          flattenCategories(categories).forEach(caseData => {
+            const stamped = stampVisionCase(caseData, file, index, visionFiles.length, usedIds);
+            if (stamped) allCases.push(stamped);
+          });
+        } catch (error) {
+          console.error(`[Vision] 图片 ${index + 1}/${visionFiles.length} 生成失败:`, error.message);
+        }
+      }
+      if (allCases.length > 0) {
+        try {
+          const globalCases = await generateGlobalFlowCases(content, allCases, visionFiles.length, options);
+          globalCases.forEach(caseData => {
+            const normalized = normalizeCaseData({ ...caseData, source: caseData.source || '全局流程复盘' }, allCases.length);
+            if (!normalized) return;
+            const key = `${normalized.category}:${normalized.title}`;
+            if (allCases.some(item => `${item.category}:${item.title}` === key)) return;
+            normalized.id = `FLOW-${sanitizeCaseId(normalized.id || normalized.title || allCases.length + 1)}`;
+            allCases.push(normalized);
+          });
+        } catch (error) {
+          console.error('[Vision] 全局流程补充用例失败:', error.message);
+        }
+        return groupCasesByCategory(allCases);
+      }
+      throw new Error('多图逐张生成后仍未得到测试用例');
+    }
+
     const contentText = await callConfiguredLLMText(
       buildSystemPrompt(),
       `需求：\n${content}`,
-      { label: '生成用例模型调用', temperature: 0.3, maxTokens: 4096 }
+      { label: '生成用例模型调用', temperature: 0.3, visionFiles: options.visionFiles }
     );
     return parseJsonResponse(contentText);
     
   } catch (error) {
+    if (options.disableMockOnError) throw error;
     console.error('AI 生成失败:', error.message);
     return generateMockCategories(content);
   }
@@ -626,9 +1002,143 @@ function generateMockCategories(content) {
 }
 
 // 流式生成用例
+async function generateCasesStreamByVisionFiles(content, onEvent, customSystemPrompt, options = {}) {
+  const visionFiles = normalizeVisionFiles(options.visionFiles);
+  const allCases = [];
+  const usedIds = new Set();
+
+  onEvent('progress', {
+    message: `检测到 ${visionFiles.length} 张图片，正在逐张生成用例，避免模型漏图...`,
+    totalImages: visionFiles.length
+  });
+
+  for (let index = 0; index < visionFiles.length; index++) {
+    const file = visionFiles[index];
+    const label = file.filename || `图片${index + 1}`;
+    let localCount = 0;
+    onEvent('progress', {
+      message: `正在处理第 ${index + 1}/${visionFiles.length} 张：${label}`,
+      imageIndex: index + 1,
+      totalImages: visionFiles.length
+    });
+
+    const emitCase = (caseData) => {
+      const stamped = stampVisionCase(caseData, file, index, visionFiles.length, usedIds);
+      if (!stamped) return;
+      localCount++;
+      allCases.push(stamped);
+      onEvent('case', { case: stamped, totalCases: allCases.length });
+    };
+
+    try {
+      const batchContent = buildVisionFileFocusContent(content, file, index, visionFiles.length);
+      await generateCasesStream(batchContent, (event, data) => {
+        if (event === 'case' && data.case) {
+          emitCase(data.case);
+          return;
+        }
+        if (event === 'analysis' && data.modules) {
+          onEvent('analysis', data);
+          return;
+        }
+        if (event === 'progress' && data.message) {
+          onEvent('progress', {
+            ...data,
+            message: `第 ${index + 1}/${visionFiles.length} 张：${data.message}`,
+            imageIndex: index + 1,
+            totalImages: visionFiles.length
+          });
+        }
+      }, customSystemPrompt, {
+        ...options,
+        visionFiles: [file],
+        disableVisionBatching: true,
+        allowEmpty: true
+      });
+
+      if (localCount === 0) {
+        onEvent('progress', {
+          message: `第 ${index + 1}/${visionFiles.length} 张流式未解析到用例，正在补偿生成...`,
+          imageIndex: index + 1,
+          totalImages: visionFiles.length
+        });
+        const categories = await generateCases(batchContent, {
+          ...options,
+          visionFiles: [file],
+          disableVisionBatching: true,
+          disableMockOnError: true
+        });
+        flattenCategories(categories).forEach(emitCase);
+      }
+
+      onEvent('progress', {
+        message: `第 ${index + 1}/${visionFiles.length} 张完成，已累计 ${allCases.length} 条用例`,
+        imageIndex: index + 1,
+        totalImages: visionFiles.length,
+        totalCases: allCases.length
+      });
+    } catch (error) {
+      console.error(`[Vision] 第 ${index + 1}/${visionFiles.length} 张生成失败:`, error.message);
+      onEvent('progress', {
+        message: `第 ${index + 1}/${visionFiles.length} 张生成失败：${error.message}`,
+        imageIndex: index + 1,
+        totalImages: visionFiles.length
+      });
+    }
+  }
+
+  if (allCases.length > 0) {
+    onEvent('progress', {
+      message: `逐图用例已生成 ${allCases.length} 条，正在做全局流程复盘...`,
+      totalImages: visionFiles.length,
+      totalCases: allCases.length
+    });
+    try {
+      const globalCases = await generateGlobalFlowCases(content, allCases, visionFiles.length, options);
+      globalCases.forEach(caseData => {
+        const normalized = normalizeCaseData({ ...caseData, source: caseData.source || '全局流程复盘' }, allCases.length);
+        if (!normalized) return;
+        const key = `${normalized.category}:${normalized.title}`;
+        if (allCases.some(item => `${item.category}:${item.title}` === key)) return;
+        normalized.id = `FLOW-${sanitizeCaseId(normalized.id || normalized.title || allCases.length + 1)}`;
+        allCases.push(normalized);
+        onEvent('case', { case: normalized, totalCases: allCases.length });
+      });
+      onEvent('progress', {
+        message: `全局流程复盘完成，累计 ${allCases.length} 条用例`,
+        totalImages: visionFiles.length,
+        totalCases: allCases.length
+      });
+    } catch (error) {
+      console.error('[Vision] 全局流程补充用例失败:', error.message);
+      onEvent('progress', { message: `全局流程复盘失败：${error.message}` });
+    }
+  }
+
+  const categories = groupCasesByCategory(allCases);
+  if (allCases.length === 0 && !options.allowEmpty) {
+    throw new Error('多图逐张生成后仍未得到测试用例');
+  }
+  onEvent('complete', {
+    categories,
+    rawTextLength: 0,
+    rawTextPreview: '',
+    totalImages: visionFiles.length,
+    totalCases: allCases.length
+  });
+}
+
 async function generateCasesStream(content, onEvent, customSystemPrompt, options = {}) {
   const llmConfig = getLLMConfig();
   onEvent('progress', { message: `正在调用当前模型：${llmConfig.provider || 'custom'}/${llmConfig.model || llmConfig.deploymentName || 'unknown'}...` });
+
+  const visionFiles = normalizeVisionFiles(options.visionFiles);
+  if (visionFiles.length > 1 && !options.disableVisionBatching) {
+    return generateCasesStreamByVisionFiles(content, onEvent, customSystemPrompt, {
+      ...options,
+      visionFiles
+    });
+  }
 
   if (!llmConfig.apiKey) {
     const categories = generateMockCategories(content);
@@ -722,7 +1232,8 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
       stream: true,
       onToken: handleToken,
       signal: options.signal,
-      maxTokens: options.maxTokens
+      maxTokens: options.maxTokens,
+      visionFiles: options.visionFiles
     }
   );
 
@@ -778,6 +1289,24 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
     }
   }
 
+  if (allCases.length === 0) {
+    const recoveredCategories = parseCategoriesFromModelText(rawText);
+    recoveredCategories.forEach(category => {
+      (category.cases || []).forEach(caseData => {
+        const normalizedCase = normalizeCaseData({ ...caseData, category: caseData.category || category.name || category.type });
+        if (!normalizedCase) return;
+        const caseKey = normalizedCase.id || `${normalizedCase.category || ''}:${normalizedCase.title || ''}`;
+        if (emittedCases.has(caseKey)) return;
+        emittedCases.add(caseKey);
+        allCases.push(normalizedCase);
+        onEvent('case', { case: normalizedCase, totalCases: allCases.length });
+      });
+    });
+    if (allCases.length > 0) {
+      onEvent('progress', { message: `已从模型完整响应中恢复 ${allCases.length} 条用例` });
+    }
+  }
+
   // 按 category 组装最终结果
   const catMap = {};
   for (const c of allCases) {
@@ -788,24 +1317,23 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
   if (allCases.length === 0 && !options.allowEmpty) {
     throw new Error('模型响应中没有解析到测试用例');
   }
-  onEvent('complete', { categories: Object.values(catMap), rawTextLength: rawText.length, rawTextPreview: rawText.slice(0, 800) });
+  onEvent('complete', { categories: Object.values(catMap), rawTextLength: rawText.length, rawTextPreview: rawText });
 }
 
 // 通用 LLM 调用（用于碎片提取等）
 async function callLLM(systemPrompt, userContent) {
   return callConfiguredLLMText(systemPrompt, userContent, {
     label: '通用模型调用',
-    temperature: 0.3,
-    maxTokens: 4096
+    temperature: 0.3
   });
 }
 
 // 专用分析调用（强制 JSON 输出）
-async function callLLMForAnalysis(systemPrompt, userContent) {
+async function callLLMForAnalysis(systemPrompt, userContent, options = {}) {
   return callConfiguredLLMText(systemPrompt, userContent, {
     label: '需求分析模型调用',
     temperature: 0.1,
-    maxTokens: 4096
+    visionFiles: options.visionFiles
   });
 }
 
@@ -816,12 +1344,13 @@ async function callLLMForAnalysisStream(systemPrompt, userContent, onToken, opti
     stream: true,
     onToken,
     signal: options.signal,
-    maxTokens: options.maxTokens || 4096
+    maxTokens: options.maxTokens,
+    visionFiles: options.visionFiles
   });
 }
 
 // 多模态 LLM 调用（支持图片）
-async function callLLMWithImage(systemPrompt, textContent, imageBase64, maxTokens = 1200) {
+async function callLLMWithImage(systemPrompt, textContent, imageBase64, maxTokens = DEFAULT_VISION_MAX_OUTPUT_TOKENS) {
   const llmConfig = getLLMConfig();
   const apiKey = llmConfig.apiKey;
   const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
@@ -834,7 +1363,7 @@ async function callLLMWithImage(systemPrompt, textContent, imageBase64, maxToken
     const userContent = [{ type: 'text', text: textContent }];
     if (imageBase64) {
       const image = parseImageDataUrl(imageBase64);
-      userContent.unshift({
+      userContent.push({
         type: 'image',
         source: {
           type: 'base64',
@@ -1006,11 +1535,11 @@ async function extractRequirementFromImage(imageBase64, options = {}) {
       : '请简洁提取这张图片中的功能需求和关键交互，不要展开解释',
     filename ? `文件名：${filename}` : '',
     contextText
-      ? `以下是系统从 HTML 中辅助抽取的文本，只作参考，最终以截图可见内容为准：\n${contextText.slice(0, 8000)}`
+      ? `以下是系统从 HTML 中辅助抽取的文本，只作参考，最终以截图可见内容为准：\n${contextText}`
       : '',
   ].filter(Boolean).join('\n\n');
 
-  return await callLLMWithImage(systemPrompt, userText, imageBase64, isHtmlScreenshot ? 1800 : 1200);
+  return await callLLMWithImage(systemPrompt, userText, imageBase64, DEFAULT_VISION_MAX_OUTPUT_TOKENS);
 }
 
 // 需求分析
@@ -1229,7 +1758,7 @@ function normalizeAnalysisReport(payload) {
       modules: [],
       risks: payload,
       testScope: { inScope: [], outOfScope: [] },
-      questions: payload.map(item => item.suggestion).filter(Boolean).slice(0, 8),
+      questions: payload.map(item => item.suggestion).filter(Boolean),
       acceptance: [],
       testStrategy: []
     };
@@ -1393,9 +1922,59 @@ function parseAnalysisText(result) {
   }];
 }
 
-async function analyzeRequirement(content) {
+async function reviewGlobalAnalysis(content, partialAnalysis, totalImages, options = {}) {
+  if (!partialAnalysis.length || options.disableGlobalReview) {
+    return mergeAnalysisCategories(partialAnalysis, totalImages);
+  }
+  const summary = buildAnalysisReviewSummary(partialAnalysis);
+  const prompt = `${ANALYSIS_PROMPT}
+
+【全局复盘任务】
+前面已经按 ${totalImages} 张图片逐张完成页面级需求分析。现在请基于这些逐图分析结果，做一次完整业务流程复盘。
+
+重点补充：
+1. 图片之间的业务顺序和主链路
+2. 跨页面、跨模块、跨端的数据流和状态流转
+3. 页面级分析看不到的端到端风险
+4. 权限、角色、数据一致性、回归影响和自动化优先级
+5. 不要丢弃逐图分析中已经发现的模块、风险和待确认问题
+
+仍然只输出合法 JSON 对象。`;
+  const userContent = [
+    `原始需求：\n${content}`,
+    `逐图分析合并摘要：\n${JSON.stringify(summary, null, 2)}`
+  ].join('\n\n');
+  const result = await callLLMForAnalysis(prompt, userContent, {});
+  const reviewed = parseAnalysisText(result);
+  return mergeAnalysisCategories([...partialAnalysis, ...reviewed], totalImages);
+}
+
+async function analyzeRequirement(content, options = {}) {
   console.log('[分析] 开始需求分析...');
-  const result = await callLLMForAnalysis(ANALYSIS_PROMPT, content);
+  const visionFiles = normalizeVisionFiles(options.visionFiles);
+  if (visionFiles.length > 1 && !options.disableVisionBatching) {
+    console.log(`[分析] 多图按图片逐张分析：${visionFiles.length} 张`);
+    const allAnalysis = [];
+    for (let index = 0; index < visionFiles.length; index++) {
+      const file = visionFiles[index];
+      const focusedContent = buildVisionAnalysisFocusContent(content, file, index, visionFiles.length);
+      try {
+        const partial = await analyzeRequirement(focusedContent, {
+          ...options,
+          visionFiles: [file],
+          disableVisionBatching: true
+        });
+        allAnalysis.push(...partial);
+      } catch (error) {
+        console.error(`[分析] 第 ${index + 1}/${visionFiles.length} 张分析失败:`, error.message);
+      }
+    }
+    if (allAnalysis.length > 0) {
+      return reviewGlobalAnalysis(content, allAnalysis, visionFiles.length, options);
+    }
+    throw new Error('多图逐张分析后仍未得到需求分析结果');
+  }
+  const result = await callLLMForAnalysis(ANALYSIS_PROMPT, content, options);
   console.log('[分析] LLM 返回结果长度:', result.length);
   console.log('[分析] LLM 返回结果前200字符:', result.substring(0, 200));
   return parseAnalysisText(result);
@@ -1403,6 +1982,68 @@ async function analyzeRequirement(content) {
 
 async function analyzeRequirementStream(content, onEvent, options = {}) {
   console.log('[分析] 开始流式需求分析...');
+  const visionFiles = normalizeVisionFiles(options.visionFiles);
+  if (visionFiles.length > 1 && !options.disableVisionBatching) {
+    console.log(`[分析] 流式多图按图片逐张分析：${visionFiles.length} 张`);
+    const allAnalysis = [];
+    const rawParts = [];
+    for (let index = 0; index < visionFiles.length; index++) {
+      const file = visionFiles[index];
+      const label = file.filename || `图片${index + 1}`;
+      onEvent('progress', {
+        message: `正在分析第 ${index + 1}/${visionFiles.length} 张：${label}`,
+        imageIndex: index + 1,
+        totalImages: visionFiles.length
+      });
+      let partialRaw = '';
+      try {
+        const focusedContent = buildVisionAnalysisFocusContent(content, file, index, visionFiles.length);
+        partialRaw = await callLLMForAnalysisStream(ANALYSIS_PROMPT, focusedContent, (token) => {
+          rawParts.push(token);
+          onEvent('token', { text: token });
+        }, {
+          ...options,
+          visionFiles: [file],
+          disableVisionBatching: true
+        });
+        const partialAnalysis = parseAnalysisText(partialRaw);
+        allAnalysis.push(...partialAnalysis);
+        onEvent('progress', {
+          message: `第 ${index + 1}/${visionFiles.length} 张分析完成，正在继续下一张...`,
+          imageIndex: index + 1,
+          totalImages: visionFiles.length
+        });
+      } catch (error) {
+        console.error(`[分析] 第 ${index + 1}/${visionFiles.length} 张分析失败:`, error.message);
+        onEvent('progress', {
+          message: `第 ${index + 1}/${visionFiles.length} 张分析失败：${error.message}`,
+          imageIndex: index + 1,
+          totalImages: visionFiles.length
+        });
+      }
+    }
+    onEvent('progress', {
+      message: `逐图分析已完成，正在进行全局业务流程复盘...`,
+      totalImages: visionFiles.length
+    });
+    let analysis = mergeAnalysisCategories(allAnalysis, visionFiles.length);
+    try {
+      analysis = await reviewGlobalAnalysis(content, allAnalysis, visionFiles.length, options);
+      onEvent('progress', {
+        message: '全局业务流程复盘完成',
+        totalImages: visionFiles.length
+      });
+    } catch (error) {
+      console.error('[分析] 全局业务流程复盘失败:', error.message);
+      onEvent('progress', {
+        message: `全局业务流程复盘失败：${error.message}`,
+        totalImages: visionFiles.length
+      });
+    }
+    const rawText = rawParts.join('');
+    onEvent('complete', { cases: analysis, rawText });
+    return analysis;
+  }
   let lastEmit = 0;
   const rawText = await callLLMForAnalysisStream(ANALYSIS_PROMPT, content, (token) => {
     const now = Date.now();

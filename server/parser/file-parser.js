@@ -144,12 +144,12 @@ function splitVisibleText(value) {
     .filter(Boolean);
 }
 
-function pushUnique(list, value, limit = 80) {
+function pushUnique(list, value, limit = 0) {
   const text = normalizeVisibleText(value);
   if (!text || text.length < 2) return;
   if (/^(确定|取消|返回|保存|提交)$/.test(text) && list.includes(text)) return;
   if (list.some(item => item === text)) return;
-  list.push(text.length > limit ? `${text.slice(0, limit)}...` : text);
+  list.push(limit > 0 && text.length > limit ? `${text.slice(0, limit)}...` : text);
 }
 
 function isNoiseText(text) {
@@ -175,17 +175,17 @@ function buildHtmlTextSummary({ sourceName, title, metaDescription, headings, im
   if (title) lines.push(`页面标题：${title}`);
   if (metaDescription) lines.push(`页面描述：${metaDescription}`);
   lines.push('');
-  lines.push(formatSection('页面/模块层级', headings.slice(0, 18), title || '未识别到明确标题'));
+  lines.push(formatSection('页面/模块层级', headings, title || '未识别到明确标题'));
   lines.push('');
-  lines.push(formatSection('需求/业务规则线索', importantLines.slice(0, 30)));
+  lines.push(formatSection('需求/业务规则线索', importantLines));
   lines.push('');
-  lines.push(formatSection('表单字段', formFields.slice(0, 28)));
+  lines.push(formatSection('表单字段', formFields));
   lines.push('');
-  lines.push(formatSection('按钮/链接/操作入口', actions.slice(0, 30)));
+  lines.push(formatSection('按钮/链接/操作入口', actions));
   lines.push('');
-  lines.push(formatSection('表格/列表字段', tables.slice(0, 18)));
+  lines.push(formatSection('表格/列表字段', tables));
   lines.push('');
-  lines.push(formatSection('可见正文片段', bodyLines.slice(0, 80)));
+  lines.push(formatSection('可见正文片段', bodyLines));
 
   const usableSignals = headings.length + importantLines.length + formFields.length + actions.length + tables.length + bodyLines.length;
   if (usableSignals < 12) {
@@ -234,14 +234,14 @@ function parseHtmlContent(content, sourceName = 'HTML 文档', options = {}) {
     // Axure/原型导出常用 ax_default + _标题 类表达标题。
     $('[class*="标题"], [class*="heading"], [class*="title"]').each((_, element) => {
       const text = normalizeVisibleText($(element).text());
-      if (text && text.length <= 80) pushUnique(headings, text, 80);
+      if (text) pushUnique(headings, text);
     });
 
     $('p, li, dd, dt, blockquote, [class*="text"], [id$="_text"]').each((_, element) => {
       splitVisibleText($(element).text()).forEach(line => {
         if (isNoiseText(line)) return;
-        pushUnique(bodyLines, line, 140);
-        if (importantPattern.test(line)) pushUnique(importantLines, line, 150);
+        pushUnique(bodyLines, line);
+        if (importantPattern.test(line)) pushUnique(importantLines, line);
       });
     });
 
@@ -263,11 +263,11 @@ function parseHtmlContent(content, sourceName = 'HTML 文档', options = {}) {
       const required = $el.attr('required') !== undefined ? '，必填' : '';
       const placeholder = normalizeVisibleText($el.attr('placeholder'));
       const optionTexts = element.tagName?.toLowerCase() === 'select'
-        ? $el.find('option').map((__, option) => normalizeVisibleText($(option).text())).get().filter(Boolean).slice(0, 6)
+        ? $el.find('option').map((__, option) => normalizeVisibleText($(option).text())).get().filter(Boolean)
         : [];
       const optionText = optionTexts.length ? `，选项：${optionTexts.join('/')}` : '';
       const placeholderText = placeholder && placeholder !== label ? `，占位：${placeholder}` : '';
-      pushUnique(formFields, `${label}（${type || '字段'}${required}${placeholderText}${optionText}）`, 150);
+      pushUnique(formFields, `${label}（${type || '字段'}${required}${placeholderText}${optionText}）`);
     });
 
     $('button, a, [role="button"], input[type="button"], input[type="submit"], input[type="reset"]').each((_, element) => {
@@ -275,8 +275,8 @@ function parseHtmlContent(content, sourceName = 'HTML 文档', options = {}) {
       const text = normalizeVisibleText($el.text() || $el.attr('value') || $el.attr('aria-label') || $el.attr('title') || '');
       if (!text || isNoiseText(text)) return;
       const href = normalizeVisibleText($el.attr('href'));
-      const hrefText = href && !href.startsWith('#') && href.length < 80 ? ` -> ${href}` : '';
-      pushUnique(actions, `${text}${hrefText}`, 100);
+      const hrefText = href && !href.startsWith('#') ? ` -> ${href}` : '';
+      pushUnique(actions, `${text}${hrefText}`);
     });
 
     $('table').each((index, table) => {
@@ -286,13 +286,13 @@ function parseHtmlContent(content, sourceName = 'HTML 文档', options = {}) {
       }).get().filter(row => Array.isArray(row) && row.length > 0);
       if (rows.length === 0) return;
       const header = rows.find(row => row.length >= 2) || rows[0];
-      const text = header.slice(0, 8).join(' / ');
-      if (text && !isNoiseText(text)) pushUnique(tables, `表格${index + 1}：${text}`, 160);
+      const text = header.join(' / ');
+      if (text && !isNoiseText(text)) pushUnique(tables, `表格${index + 1}：${text}`);
     });
 
     if (bodyLines.length === 0) {
       splitVisibleText($('body').text()).forEach(line => {
-        if (!isNoiseText(line)) pushUnique(bodyLines, line, 140);
+        if (!isNoiseText(line)) pushUnique(bodyLines, line);
       });
     }
 
@@ -311,7 +311,7 @@ function parseHtmlContent(content, sourceName = 'HTML 文档', options = {}) {
 
     return {
       type: 'html',
-      text: text.length > 24000 ? `${text.slice(0, 24000)}\n\n【截断提示】HTML 内容较长，已保留前 24000 字用于生成。` : text,
+      text,
       title,
       lines: bodyLines.length,
       summary: {
@@ -443,7 +443,7 @@ async function parseZipArchive(filePath) {
     }
 
     const pages = [];
-    for (const file of htmlFiles.slice(0, 40)) {
+    for (const file of htmlFiles) {
       const content = await file.async('string');
       const parsed = parseHtmlContent(content, file.name, { isBundlePage: true });
       pages.push({
@@ -457,7 +457,7 @@ async function parseZipArchive(filePath) {
     const text = [
       '【HTML原型包结构化摘要】',
       `来源文件：${path.basename(filePath)}`,
-      `页面数量：${htmlFiles.length}${htmlFiles.length > pages.length ? `（已解析前 ${pages.length} 个页面）` : ''}`,
+      `页面数量：${htmlFiles.length}`,
       '解析说明：已按页面抽取标题、业务文案、表单、按钮、链接和表格字段；生成用例时应按页面/模块组织，不要按 HTML 文件名机械分类。',
       '',
       ...pages.map(page => page.text),
@@ -465,7 +465,7 @@ async function parseZipArchive(filePath) {
 
     return {
       type: 'html_bundle',
-      text: text.length > 50000 ? `${text.slice(0, 50000)}\n\n【截断提示】HTML 原型包内容较长，已保留前 50000 字用于生成。` : text,
+      text,
       ...rendered,
       visionInput: Boolean(rendered.base64),
       visionSource: 'html-bundle-screenshot',

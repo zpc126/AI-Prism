@@ -16,6 +16,8 @@ class EnhancedRunner {
     this.reportDir = options.reportDir || path.join(os.tmpdir(), 'scout-reports');
     this.screenshotIndex = 0;
     this.currentResultId = null;
+    this.tmpProfile = path.join(os.tmpdir(), 'scout-chrome-profile');
+    this.videoSession = null;
   }
 
   // 获取用户 Chrome profile 路径
@@ -29,6 +31,43 @@ class EnhancedRunner {
     return path.join(os.homedir(), '.config/google-chrome');
   }
 
+  buildPersistentContextOptions() {
+    return {
+      headless: false,
+      channel: 'chrome',
+      viewport: { width: 1280, height: 800 },
+      ...(this.videoSession?.dir ? {
+        recordVideo: {
+          dir: this.videoSession.dir,
+          size: { width: 1280, height: 800 },
+        }
+      } : {}),
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--no-first-run',
+        '--no-default-browser-check',
+      ],
+    };
+  }
+
+  buildCleanContextOptions() {
+    return {
+      viewport: { width: 1280, height: 800 },
+      ...(this.videoSession?.dir ? {
+        recordVideo: {
+          dir: this.videoSession.dir,
+          size: { width: 1280, height: 800 },
+        }
+      } : {}),
+    };
+  }
+
+  safeVideoName(value) {
+    return String(value || 'case')
+      .replace(/[^\w\u4e00-\u9fa5-]+/g, '_')
+      .slice(0, 80);
+  }
+
   // 启动浏览器
   async launch(onLog) {
     onLog({ type: 'system', text: '正在启动 Chrome...' });
@@ -36,7 +75,7 @@ class EnhancedRunner {
     try {
       // 尝试使用持久化上下文继承登录态
       const userDataDir = this.getChromeUserDataDir();
-      const tmpProfile = path.join(os.tmpdir(), 'scout-chrome-profile');
+      const tmpProfile = this.tmpProfile;
 
       // 复制关键文件
       if (!fs.existsSync(tmpProfile)) {
@@ -63,16 +102,7 @@ class EnhancedRunner {
         }
       }
 
-      this.context = await chromium.launchPersistentContext(tmpProfile, {
-        headless: false,
-        channel: 'chrome',
-        viewport: { width: 1280, height: 800 },
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--no-first-run',
-          '--no-default-browser-check',
-        ],
-      });
+      this.context = await chromium.launchPersistentContext(tmpProfile, this.buildPersistentContextOptions());
 
       this.page = this.context.pages()[0] || await this.context.newPage();
       onLog({ type: 'success', text: 'Chrome 已启动，登录态已继承' });
@@ -85,9 +115,7 @@ class EnhancedRunner {
         channel: 'chrome',
         args: ['--disable-blink-features=AutomationControlled'],
       });
-      this.context = await this.browser.newContext({
-        viewport: { width: 1280, height: 800 },
-      });
+      this.context = await this.browser.newContext(this.buildCleanContextOptions());
       this.page = await this.context.newPage();
       onLog({ type: 'system', text: '干净浏览器已启动（无登录态）' });
     }
@@ -111,6 +139,48 @@ class EnhancedRunner {
   async captureFrame() {
     if (!this.page || this.page.isClosed()) return null;
     return await this.page.screenshot({ type: 'png', fullPage: false });
+  }
+
+  async startNativeVideo({ reportDir, caseId } = {}) {
+    if (!reportDir) return null;
+    const dir = path.join(reportDir, 'playwright-videos', `${this.safeVideoName(caseId)}_${Date.now()}`);
+    fs.mkdirSync(dir, { recursive: true });
+    this.videoSession = {
+      dir,
+      caseId: this.safeVideoName(caseId),
+      startedAt: Date.now(),
+    };
+    await this.close();
+    await this.launch(() => {});
+    return this.videoSession;
+  }
+
+  async stopNativeVideo({ keep = false } = {}) {
+    const session = this.videoSession;
+    if (!session) return null;
+    await this.close();
+    this.videoSession = null;
+    if (!keep) {
+      fs.rmSync(session.dir, { recursive: true, force: true });
+      await this.launch(() => {});
+      return null;
+    }
+    const files = fs.existsSync(session.dir)
+      ? fs.readdirSync(session.dir).filter(file => /\.(webm|mp4)$/i.test(file))
+      : [];
+    if (!files.length) {
+      fs.rmSync(session.dir, { recursive: true, force: true });
+      await this.launch(() => {});
+      return null;
+    }
+    const sourcePath = path.join(session.dir, files[0]);
+    const ext = path.extname(sourcePath) || '.webm';
+    const reportDir = path.dirname(path.dirname(session.dir));
+    const targetPath = path.join(reportDir, `failure_${session.caseId}_${session.startedAt}${ext}`);
+    fs.renameSync(sourcePath, targetPath);
+    fs.rmSync(session.dir, { recursive: true, force: true });
+    await this.launch(() => {});
+    return targetPath;
   }
 
   // 执行单个测试用例

@@ -66,7 +66,7 @@ function extractKeywords(text) {
  */
 function recall(query, options = {}) {
   const db = getDb();
-  const { limit = 10, threshold = 0.1, includeConsolidated = false, source } = options;
+  const { limit = Number.MAX_SAFE_INTEGER, threshold = 0.1, includeConsolidated = false, source } = options;
   
   // 获取所有活跃碎片
   let sql = 'SELECT * FROM fragments';
@@ -129,17 +129,17 @@ function recall(query, options = {}) {
   });
   
   // 过滤和排序
-  return scored
+  const sorted = scored
     .filter(f => f.score >= threshold)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score);
+  return Number.isFinite(limit) ? sorted.slice(0, limit) : sorted;
 }
 
 /**
  * 标签关联扩展检索
  */
 function recallWithAssociations(query, options = {}) {
-  const { limit = 10, source } = options;
+  const { limit = Number.MAX_SAFE_INTEGER, source } = options;
   
   // 第一轮：直接检索
   let results = recall(query, { limit, source });
@@ -173,9 +173,8 @@ function recallWithAssociations(query, options = {}) {
   }
   
   // 重新排序并截断
-  return results
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+  const sorted = results.sort((a, b) => b.score - a.score);
+  return Number.isFinite(limit) ? sorted.slice(0, limit) : sorted;
 }
 
 /**

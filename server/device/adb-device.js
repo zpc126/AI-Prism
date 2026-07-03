@@ -192,8 +192,8 @@ function getSnapshot() {
     device: 'mobile',
     deviceLabel: 'Android 真机',
     snapshot: {
-      visibleText: visible.slice(0, 50).map(node => node.text || node.description),
-      buttons: visible.filter(node => node.clickable).slice(0, 30).map(node => ({ text: node.text || node.description })),
+      visibleText: visible.map(node => node.text || node.description),
+      buttons: visible.filter(node => node.clickable).map(node => ({ text: node.text || node.description })),
       inputs: nodes.filter(node => node.editable).map(node => ({ placeholder: node.text || node.description || node.resourceId })),
     },
     summary: `Android 真机界面：${visible.length} 个可见文本，${nodes.filter(node => node.editable).length} 个输入框`,

@@ -14,6 +14,7 @@ const browserSessions = {
 };
 let activeDevice = 'web';
 const browserProfileDir = path.join(__dirname, '../../data/browser-profile');
+let activeVideoSession = null;
 
 const DEVICE_CONFIGS = {
   web: {
@@ -58,6 +59,12 @@ function resetBrowserState(device) {
   browserSessions[device] = { browser: null, context: null, page: null };
 }
 
+function safeVideoName(value) {
+  return String(value || 'case')
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '_')
+    .slice(0, 80);
+}
+
 // 启动浏览器
 async function launchBrowser(device = activeDevice) {
   const normalizedDevice = device === 'mobile' ? 'mobile' : 'web';
@@ -74,7 +81,7 @@ async function launchBrowser(device = activeDevice) {
     resetBrowserState(normalizedDevice);
     
     fs.mkdirSync(config.profileDir, { recursive: true });
-    const context = await chromium.launchPersistentContext(config.profileDir, {
+    const contextOptions = {
       headless: false,
       channel: 'chrome',
       viewport: config.viewport,
@@ -82,12 +89,19 @@ async function launchBrowser(device = activeDevice) {
       deviceScaleFactor: config.deviceScaleFactor,
       hasTouch: config.hasTouch,
       isMobile: config.isMobile,
+      ...(activeVideoSession?.dir ? {
+        recordVideo: {
+          dir: activeVideoSession.dir,
+          size: config.viewport,
+        }
+      } : {}),
       args: [
         '--disable-blink-features=AutomationControlled',
         '--no-first-run',
         '--no-default-browser-check',
       ],
-    });
+    };
+    const context = await chromium.launchPersistentContext(config.profileDir, contextOptions);
 
     const browser = context.browser();
     const page = context.pages().find(candidate => !candidate.isClosed()) || await context.newPage();
@@ -98,6 +112,57 @@ async function launchBrowser(device = activeDevice) {
     });
   }
   return { ...browserSessions[normalizedDevice], device: normalizedDevice, deviceLabel: config.label };
+}
+
+async function startCaseVideo({ reportDir, caseId } = {}) {
+  if (!reportDir) return null;
+  const dir = path.join(reportDir, 'playwright-videos', `${safeVideoName(caseId)}_${Date.now()}`);
+  fs.mkdirSync(dir, { recursive: true });
+  activeVideoSession = { dir, caseId: safeVideoName(caseId), startedAt: Date.now() };
+  for (const device of Object.keys(browserSessions)) {
+    const session = browserSessions[device];
+    if (session.context) {
+      try {
+        await session.context.close();
+      } catch {}
+      resetBrowserState(device);
+    }
+  }
+  activeDevice = 'web';
+  return activeVideoSession;
+}
+
+async function stopCaseVideo({ keep = false } = {}) {
+  const session = activeVideoSession;
+  if (!session) return null;
+  for (const device of Object.keys(browserSessions)) {
+    const browserSession = browserSessions[device];
+    if (browserSession.context) {
+      try {
+        await browserSession.context.close();
+      } catch {}
+      resetBrowserState(device);
+    }
+  }
+  activeVideoSession = null;
+  if (!keep) {
+    fs.rmSync(session.dir, { recursive: true, force: true });
+    return null;
+  }
+  const files = fs.existsSync(session.dir)
+    ? fs.readdirSync(session.dir).filter(file => /\.(webm|mp4)$/i.test(file))
+    : [];
+  if (!files.length) {
+    fs.rmSync(session.dir, { recursive: true, force: true });
+    return null;
+  }
+  const sourcePath = path.join(session.dir, files[0]);
+  const ext = path.extname(sourcePath) || '.webm';
+  const reportDir = path.dirname(path.dirname(session.dir));
+  const targetPath = path.join(reportDir, `failure_${session.caseId}_${session.startedAt}${ext}`);
+  fs.renameSync(sourcePath, targetPath);
+  fs.rmSync(session.dir, { recursive: true, force: true });
+  return targetPath;
 }
 
 async function switchDevice(device) {
@@ -300,7 +365,7 @@ async function getSnapshot() {
     document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]').forEach(el => {
       const text = el.textContent?.trim() || el.value || el.getAttribute('aria-label');
       if (text && el.offsetParent !== null) {
-        result.buttons.push({ text: text.substring(0, 50), tag: el.tagName });
+        result.buttons.push({ text, tag: el.tagName });
       }
     });
     
@@ -308,7 +373,7 @@ async function getSnapshot() {
     document.querySelectorAll('a[href]').forEach(el => {
       const text = el.textContent?.trim();
       if (text && el.offsetParent !== null) {
-        result.links.push({ text: text.substring(0, 50), href: el.href?.substring(0, 100) });
+        result.links.push({ text, href: el.href });
       }
     });
     
@@ -316,14 +381,14 @@ async function getSnapshot() {
     document.querySelectorAll('input, textarea, [contenteditable="true"]').forEach(el => {
       const placeholder = el.placeholder || el.getAttribute('aria-label') || el.name;
       if (el.offsetParent !== null) {
-        result.inputs.push({ placeholder: placeholder?.substring(0, 50), type: el.type || 'text' });
+        result.inputs.push({ placeholder, type: el.type || 'text' });
       }
     });
     
     // 获取标题
     document.querySelectorAll('h1, h2, h3').forEach(el => {
       if (el.offsetParent !== null) {
-        result.headings.push({ tag: el.tagName, text: el.textContent?.trim().substring(0, 80) });
+        result.headings.push({ tag: el.tagName, text: el.textContent?.trim() });
       }
     });
     
@@ -518,6 +583,8 @@ module.exports = {
   fill,
   screenshot,
   captureFrame,
+  startCaseVideo,
+  stopCaseVideo,
   getSnapshot,
   waitForElement,
   scroll,

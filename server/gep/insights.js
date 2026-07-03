@@ -78,7 +78,6 @@ function getRelevantInsights(geneId, pageContext = {}) {
     SELECT * FROM insights 
     WHERE gene_id IS NULL 
     ORDER BY confidence DESC, usage_count DESC
-    LIMIT 20
   `).all();
 
   insights.push(...generalInsights.map(row => ({
@@ -89,8 +88,7 @@ function getRelevantInsights(geneId, pageContext = {}) {
   // 按页面上下文过滤和排序
   return insights
     .filter(insight => isInsightRelevant(insight, pageContext))
-    .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, 10);
+    .sort((a, b) => b.confidence - a.confidence);
 }
 
 /**

@@ -120,8 +120,8 @@ async function scrapeGeneric(url) {
   
   return {
     title,
-    content: content.substring(0, 10000), // 限制长度
-    images: images.slice(0, 20),
+    content,
+    images,
     type: 'webpage',
     url,
   };
@@ -189,7 +189,7 @@ async function scrapeFeishu(url) {
     
     return {
       title: result.title,
-      content: content.substring(0, 10000),
+      content,
       images: [],
       type: 'feishu',
       url,
@@ -239,7 +239,7 @@ async function scrapeNotion(url) {
   
   return {
     title,
-    content: content.substring(0, 10000),
+    content,
     images: [],
     type: 'notion',
     url,

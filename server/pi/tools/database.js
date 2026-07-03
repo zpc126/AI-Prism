@@ -17,18 +17,13 @@ async function executeQuery(sql, params = []) {
       const stmt = db.prepare(sql);
       const rows = stmt.all(...params);
       
-      // 限制返回行数
-      const maxRows = 100;
-      const truncated = rows.length > maxRows;
-      const resultRows = truncated ? rows.slice(0, maxRows) : rows;
-      
       return {
         success: true,
         type: 'select',
-        rowCount: resultRows.length,
+        rowCount: rows.length,
         totalRows: rows.length,
-        truncated,
-        rows: resultRows,
+        truncated: false,
+        rows,
       };
     } else {
       // INSERT, UPDATE, DELETE 等

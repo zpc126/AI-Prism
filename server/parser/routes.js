@@ -33,7 +33,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB
+    fileSize: 500 * 1024 * 1024, // 500MB
   },
   fileFilter: (req, file, cb) => {
     if (isSupportedFile(file.originalname)) {
@@ -82,7 +82,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 /**
  * 多文件上传并解析
  */
-router.post('/upload-multiple', upload.array('files', 10), async (req, res) => {
+router.post('/upload-multiple', upload.array('files', 500), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ success: false, error: '请上传文件' });

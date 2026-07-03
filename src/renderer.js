@@ -138,7 +138,7 @@ function getAnalysisHistory() {
 function saveAnalysisHistory(report) {
   const reports = getAnalysisHistory();
   reports.unshift(report);
-  localStorage.setItem(ANALYSIS_HISTORY_KEY, JSON.stringify(reports.slice(0, 50)));
+  localStorage.setItem(ANALYSIS_HISTORY_KEY, JSON.stringify(reports));
   updateAnalysisHistoryEntry();
 }
 
@@ -151,7 +151,7 @@ function updateAnalysisHistoryReport(updatedReport) {
   } else {
     reports.unshift(normalized);
   }
-  localStorage.setItem(ANALYSIS_HISTORY_KEY, JSON.stringify(reports.slice(0, 50)));
+  localStorage.setItem(ANALYSIS_HISTORY_KEY, JSON.stringify(reports));
   updateAnalysisHistoryEntry();
   return normalized;
 }
@@ -255,7 +255,7 @@ function updateAnalysisHistoryEntry() {
 }
 
 function getChatHistory() {
-  return state.chatHistory.slice(-30);
+  return state.chatHistory;
 }
 
 function loadLegacyChatHistory(sessionId) {
@@ -286,9 +286,6 @@ function saveChatMessage(role, content) {
     category: state.selectedCategory || '',
     createdAt: Date.now()
   });
-  if (state.chatHistory.length > 200) {
-    state.chatHistory = state.chatHistory.slice(-200);
-  }
   queueChatHistoryPersist();
 }
 
@@ -434,7 +431,7 @@ function updateStartButton() {
 }
 
 function deriveRootTitle(requirement = state.requirement) {
-  const imageFile = state.uploadedFiles.find(file => file.type === 'image' && file.filename);
+  const imageFile = state.uploadedFiles.find(file => (file.type === 'image' || file.visionInput || file.visionSource) && file.filename);
   if (imageFile) {
     const filename = imageFile.filename.replace(/\.[^.]+$/, '').trim();
     if (filename && !/^(截图|屏幕截图|image|img|photo|微信图片|未命名)/i.test(filename)) {
@@ -477,86 +474,19 @@ function updateEngineHeaderMeta() {
   }
 }
 
-async function prepareRequirementFromUploads() {
-  const visionFiles = state.uploadedFiles.filter(file =>
-    file.base64 && (file.type === 'image' || file.visionInput || file.visionSource)
-  );
-  const pendingVisionFiles = visionFiles.filter(file => !file.extractedText);
-  if (visionFiles.length === 0 || (state.requirement && pendingVisionFiles.length === 0)) return;
-  if (pendingVisionFiles.length === 0) {
-    state.requirement = visionFiles.map(file => file.extractedText).filter(Boolean).join('\n\n');
-    state.rootTitle = deriveRootTitle(state.requirement);
-    const input = $('#requirement-input');
-    if (input) input.value = state.requirement;
-    return;
-  }
-
-  const btnStart = $('#btn-start');
-  const hint = $('#input-hint');
-  const originalText = btnStart?.textContent || '开始';
-
-  if (btnStart) {
-    btnStart.disabled = true;
-    btnStart.textContent = '识别视觉材料中...';
-  }
-  if (hint) {
-    hint.textContent = `正在识别视觉材料 0/${pendingVisionFiles.length || visionFiles.length} · 0秒`;
-    hint.className = 'text-xs text-zinc-500 mt-2 text-center';
-  }
-
-  const startedAt = Date.now();
-  let completedImages = 0;
-  const timer = setInterval(() => {
-    if (hint) {
-      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      hint.textContent = `正在识别视觉材料 ${completedImages}/${pendingVisionFiles.length || visionFiles.length} · ${elapsed}秒`;
-    }
-  }, 1000);
-
-  try {
-    const requirements = await Promise.all(pendingVisionFiles.map(async file => {
-      if (file.extractedText) {
-        return file.extractedText;
-      }
-
-      const response = await fetch(`${API_BASE}/extract-requirement`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: file.base64,
-          contextText: file.textFallback || file.text || '',
-          sourceType: file.visionSource || file.type,
-          filename: file.filename || ''
-        })
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success || !data.requirement) {
-        const errorMessage = data.error || `无法识别图片 ${file.filename || ''}`;
-        if (/only support text|text input|不支持图片/i.test(errorMessage)) {
-          throw new Error('当前模型只支持文本，请在设置中切换到支持图片的视觉模型');
-        }
-        throw new Error(errorMessage);
-      }
-
-      file.extractedText = data.requirement;
-      completedImages++;
-      return data.requirement;
+function getVisionFilesPayload() {
+  return state.uploadedFiles
+    .filter(file => file.base64 && (file.type === 'image' || file.visionInput || file.visionSource))
+    .map(file => ({
+      imageBase64: file.base64,
+      filename: file.filename || file.name || '',
+      sourceType: file.visionSource || file.type || '',
+      contextText: file.textFallback || file.text || ''
     }));
+}
 
-    const mergedRequirement = [state.requirement, ...requirements]
-      .map(item => String(item || '').trim())
-      .filter(Boolean)
-      .join('\n\n');
-    state.requirement = mergedRequirement;
-    state.rootTitle = deriveRootTitle(state.requirement);
-    const input = $('#requirement-input');
-    if (input) input.value = state.requirement;
-    if (hint) hint.textContent = '';
-  } finally {
-    clearInterval(timer);
-    if (btnStart) btnStart.textContent = originalText;
-    updateStartButton();
-  }
+function getRequirementPayloadText(fallbackText = '用户上传了视觉需求材料，请直接阅读图片/原型截图。') {
+  return String(state.requirement || '').trim() || fallbackText;
 }
 
 // ========== 初始化 ==========
@@ -874,19 +804,9 @@ function initViewInput() {
       return;
     }
     if (!hasAnalysisInput()) return;
-    try {
-      await prepareRequirementFromUploads();
-      if (state.requirement) {
-        state.rootTitle = deriveRootTitle(state.requirement);
-        startAnalysis();
-      }
-    } catch (error) {
-      const hint = $('#input-hint');
-      if (hint) {
-        hint.textContent = `图片识别失败：${error.message}`;
-        hint.className = 'text-xs text-red-500 mt-2 text-center';
-      }
-    }
+    state.requirement = input.value.trim();
+    state.rootTitle = deriveRootTitle(state.requirement);
+    startAnalysis();
   });
 
   input.addEventListener('keydown', (e) => {
@@ -897,15 +817,9 @@ function initViewInput() {
         return;
       }
       if (hasAnalysisInput()) {
-        prepareRequirementFromUploads()
-          .then(() => state.requirement && startAnalysis())
-          .catch(error => {
-            const hint = $('#input-hint');
-            if (hint) {
-              hint.textContent = `图片识别失败：${error.message}`;
-              hint.className = 'text-xs text-red-500 mt-2 text-center';
-            }
-          });
+        state.requirement = input.value.trim();
+        state.rootTitle = deriveRootTitle(state.requirement);
+        startAnalysis();
       }
     }
   });
@@ -2739,6 +2653,8 @@ async function startAnalysis() {
   state.projectName = '';
   state.requirementName = getMindMapRootTitle();
   state.requirementVersion = 'V1.0';
+  const visionFiles = getVisionFilesPayload();
+  const requirementContent = getRequirementPayloadText('用户上传了视觉需求材料，请直接阅读图片/原型截图生成测试用例。');
   
   switchView('engine');
   if (state.canvas) state.canvas.clear();
@@ -2761,7 +2677,7 @@ async function startAnalysis() {
   if (engineStatus) engineStatus.textContent = '用例正在生成';
   
   // 启动动态思考过程，最后一步时跳转到画布
-  startThinkingProcess(state.requirement, () => {
+  startThinkingProcess(requirementContent, () => {
     // 思考过程结束，立即跳转到画布
     transitionToCanvas(() => {
       const genId = () => Math.random().toString(36).substr(2, 9);
@@ -2786,8 +2702,9 @@ async function startAnalysis() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content: state.requirement,
-          productName: getMindMapRootTitle()
+          content: requirementContent,
+          productName: getMindMapRootTitle(),
+          visionFiles
         })
       });
       
@@ -2887,8 +2804,9 @@ async function startAnalysis() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content: state.requirement,
-          productName: getMindMapRootTitle()
+          content: requirementContent,
+          productName: getMindMapRootTitle(),
+          visionFiles
         })
       });
       
@@ -3664,6 +3582,8 @@ async function startRequirementAnalysis() {
   console.log('[分析] 开始需求分析...');
   switchView('engine');
   setEngineWorkspaceWidth('wide');
+  const visionFiles = getVisionFilesPayload();
+  const requirementContent = getRequirementPayloadText('用户上传了视觉需求材料，请直接阅读图片/原型截图进行需求分析。');
   
   const engineStatus = $('#engine-status');
   const engineCenter = $('#engine-center');
@@ -3689,9 +3609,10 @@ async function startRequirementAnalysis() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        content: state.requirement,
+        content: requirementContent,
         productName: getMindMapRootTitle(),
-        mode: 'analyze'
+        mode: 'analyze',
+        visionFiles
       })
     });
 

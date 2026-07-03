@@ -30,15 +30,10 @@ async function sendRequest(method, url, body = null, headers = {}) {
     // 读取响应体
     const responseText = await response.text();
     
-    // 限制响应体大小
-    const maxSize = 10 * 1024; // 10KB
-    const truncated = responseText.length > maxSize;
-    const responseData = truncated ? responseText.substring(0, maxSize) : responseText;
-    
     // 尝试解析 JSON
     let jsonData = null;
     try {
-      jsonData = JSON.parse(responseData);
+      jsonData = JSON.parse(responseText);
     } catch {
       // 不是 JSON 格式
     }
@@ -48,8 +43,8 @@ async function sendRequest(method, url, body = null, headers = {}) {
       status: response.status,
       statusText: response.statusText,
       headers: Object.fromEntries(response.headers.entries()),
-      data: jsonData || responseData,
-      truncated,
+      data: jsonData || responseText,
+      truncated: false,
       size: responseText.length,
     };
   } catch (error) {

@@ -11,7 +11,7 @@ const { getBigrams, extractKeywords } = require('./recall');
  */
 async function recallWithImages(query, options = {}) {
   const db = getDb();
-  const { limit = 10, includeImages = true } = options;
+  const { limit = Number.MAX_SAFE_INTEGER, includeImages = true } = options;
 
   // 获取所有活跃碎片
   let sql = 'SELECT * FROM fragments WHERE is_consolidated = 0';
@@ -61,8 +61,10 @@ async function recallWithImages(query, options = {}) {
   // 过滤和排序
   let results = scored
     .filter(f => f.score >= 0.1)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score);
+  if (Number.isFinite(limit)) {
+    results = results.slice(0, limit);
+  }
 
   // 如果需要包含图片，获取图片信息
   if (includeImages) {

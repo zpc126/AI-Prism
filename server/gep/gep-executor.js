@@ -641,7 +641,7 @@ URL: ${fingerprint.url}
 标题: ${fingerprint.title}
 
 ## 页面结构（Accessibility Tree）
-${JSON.stringify(accessibilityTree, null, 2).substring(0, 3000)}
+${JSON.stringify(accessibilityTree, null, 2)}
 ${insightsText}
 
 ## 执行步骤生成规则
@@ -671,7 +671,7 @@ ${gene.intent}
 ${JSON.stringify(historicalPath, null, 2)}
 
 ## 当前页面结构
-${JSON.stringify(accessibilityTree, null, 2).substring(0, 3000)}
+${JSON.stringify(accessibilityTree, null, 2)}
 
 ## 历史经验
 ${insights.map(i => `- ${i.content}`).join('\n')}

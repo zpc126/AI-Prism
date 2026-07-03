@@ -527,7 +527,7 @@ class PIEngineRunner {
       ...(testCase.steps || [])
     ].filter(Boolean).join(' ');
 
-    const semanticFragments = recallWithAssociations(query, { limit: 12 }).filter(fragment => {
+    const semanticFragments = recallWithAssociations(query, { limit: Number.MAX_SAFE_INTEGER }).filter(fragment => {
       const content = fragment.content || '';
       const matchesHierarchy = [testCase.productName, testCase.moduleName, testCase.category]
         .filter(Boolean)
@@ -552,7 +552,7 @@ class PIEngineRunner {
     [...executionFragments, ...semanticFragments].forEach(fragment => {
       if (!fragmentById.has(fragment.id)) fragmentById.set(fragment.id, fragment);
     });
-    const fragments = [...fragmentById.values()].slice(0, 16);
+    const fragments = [...fragmentById.values()];
 
     const urls = [];
     const accounts = [];
@@ -624,7 +624,7 @@ class PIEngineRunner {
       '登录',
     ];
 
-    const candidates = getAllFragments({ limit: 1000 })
+    const candidates = getAllFragments({ limit: Number.MAX_SAFE_INTEGER })
       .filter(fragment => !existingIds.has(fragment.id))
       .map(fragment => {
         const content = fragment.content || '';
@@ -688,13 +688,12 @@ class PIEngineRunner {
 
     return candidates
       .filter(fragment => fragment.score >= 4)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 6);
+      .sort((a, b) => b.score - a.score);
   }
 
   formatKnowledgeFragment(fragment) {
     const tags = Array.isArray(fragment.tags) && fragment.tags.length
-      ? `标签：${fragment.tags.slice(0, 8).join('、')}\n`
+      ? `标签：${fragment.tags.join('、')}\n`
       : '';
     return `- 来源：${fragment.source || 'unknown'} #${fragment.id}\n${tags}${fragment.content}`;
   }
@@ -911,6 +910,16 @@ ${productName
   async captureFrame() {
     const { captureFrame } = require('../pi/tools/browser');
     return await captureFrame();
+  }
+
+  async startNativeVideo(options = {}) {
+    const { startCaseVideo } = require('../pi/tools/browser');
+    return await startCaseVideo(options);
+  }
+
+  async stopNativeVideo(options = {}) {
+    const { stopCaseVideo } = require('../pi/tools/browser');
+    return await stopCaseVideo(options);
   }
 
   // 关闭
