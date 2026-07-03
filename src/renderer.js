@@ -4,6 +4,27 @@
 
 const API_BASE = '/api';
 
+//#region debug-point h264-webcodecs-mirror-front
+const DEBUG_H264_MIRROR_URL = 'http://127.0.0.1:7777/event';
+function reportH264MirrorDebug(event, data = {}) {
+  try {
+    fetch(DEBUG_H264_MIRROR_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'h264-webcodecs-mirror',
+        runId: 'pre',
+        hypothesisId: data.hypothesisId || 'front',
+        event,
+        timestamp: new Date().toISOString(),
+        data
+      }),
+      keepalive: true
+    }).catch(() => {});
+  } catch (_) {}
+}
+//#endregion debug-point h264-webcodecs-mirror-front
+
 const state = {
   currentView: 'input',
   requirement: '',
@@ -322,6 +343,9 @@ async function persistCurrentSession() {
     throw new Error(data.error || '会话保存失败');
   }
   state.currentSessionId = data.session.id;
+  state.projectName = data.session.projectName || state.projectName || '';
+  state.requirementName = data.session.requirementName || data.session.title || state.requirementName || state.rootTitle;
+  state.requirementVersion = data.session.requirementVersion || state.requirementVersion || 'V1.0';
   return data.session;
 }
 
@@ -380,6 +404,24 @@ function persistCanvasChatChanges() {
   });
 }
 
+function findCaseById(caseId) {
+  for (const category of state.categories || []) {
+    const found = (category.cases || []).find(item => String(item.id) === String(caseId));
+    if (found) return { caseData: found, category };
+  }
+  return null;
+}
+
+function findExpectedInNode(node) {
+  if (!node) return '';
+  if (node.type === 'expected') return node.title || '';
+  for (const child of node.children || []) {
+    const expected = findExpectedInNode(child);
+    if (expected) return expected;
+  }
+  return '';
+}
+
 function hasAnalysisInput() {
   return Boolean(state.requirement || state.uploadedFiles.length > 0);
 }
@@ -414,6 +456,25 @@ function deriveRootTitle(requirement = state.requirement) {
 function getMindMapRootTitle() {
   if (!state.rootTitle) state.rootTitle = deriveRootTitle();
   return state.rootTitle || '测试用例';
+}
+
+function updateEngineHeaderMeta() {
+  const summaryEl = $('#requirement-summary');
+  const metaEl = $('#requirement-meta');
+  if (!summaryEl) return;
+
+  const requirementName = state.requirementName || state.rootTitle || getMindMapRootTitle();
+  const projectName = state.projectName || '';
+  const version = state.requirementVersion || '';
+  const mainTitle = projectName ? `${projectName} / ${requirementName}` : requirementName;
+  summaryEl.textContent = mainTitle || '未命名需求';
+  summaryEl.title = mainTitle || '';
+
+  if (metaEl) {
+    const metaParts = [version && `版本 ${version}`, state.currentSessionId && '已保存'].filter(Boolean);
+    metaEl.textContent = metaParts.join(' · ');
+    metaEl.classList.toggle('hidden', metaParts.length === 0);
+  }
 }
 
 async function prepareRequirementFromUploads() {
@@ -1386,6 +1447,45 @@ function showBrowserScrcpyMirrorStatus(status = {}) {
   if (empty) empty.textContent = status.message || '正在启动浏览器内视频流...';
 }
 
+function showNativeScrcpyMirrorStatus(status = {}) {
+  deviceMirrorState.mode = 'scrcpy-window';
+  stopDeviceMirrorPolling();
+  $('#device-mirror-title').textContent = 'Android 原生投屏';
+  $('#device-mirror-subtitle').textContent = 'scrcpy 独立窗口已启动';
+  $('#device-mirror-detail').textContent = '浏览器内视频流不可用，已改用原生 scrcpy 窗口';
+  $('#device-mirror-status').textContent = status.message || `原生窗口投屏中 · ${status.device?.model || 'Android 真机'}`;
+  const empty = $('#device-mirror-empty');
+  const img = $('#device-mirror-img');
+  const canvas = $('#device-mirror-canvas');
+  img?.classList.add('hidden');
+  canvas?.classList.add('hidden');
+  empty?.classList.remove('hidden');
+  if (empty) empty.textContent = '请查看电脑上的 scrcpy 独立窗口';
+}
+
+async function startNativeScrcpyMirror(reason = '') {
+  closeBrowserScrcpyMirror(false);
+  try {
+    $('#device-mirror-status').textContent = '正在启动原生 scrcpy 窗口...';
+    const response = await fetch(`${API_BASE}/device/scrcpy/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxSize: 1024, maxFps: 60 })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '原生 scrcpy 启动失败');
+    showNativeScrcpyMirrorStatus({
+      ...data.status,
+      message: reason ? `已启动原生 scrcpy：${reason}` : '已启动原生 scrcpy 窗口'
+    });
+    return true;
+  } catch (error) {
+    showSnapshotMirrorStatus(error.message || '原生 scrcpy 启动失败');
+    startDeviceMirrorPolling();
+    return false;
+  }
+}
+
 function showSnapshotMirrorStatus(reason = '') {
   deviceMirrorState.mode = 'snapshot';
   closeBrowserScrcpyMirror(true);
@@ -1422,13 +1522,22 @@ function getDeviceMirrorWsUrl() {
 function openBrowserScrcpyMirror() {
   closeBrowserScrcpyMirror(false);
   showBrowserScrcpyMirrorStatus({ message: '正在连接浏览器内视频流...' });
+  //#region debug-point h264-webcodecs-mirror-open
+  reportH264MirrorDebug('browser-mirror-open', {
+    hypothesisId: 'H5',
+    href: window.location.href,
+    protocol: window.location.protocol,
+    isSecureContext: window.isSecureContext,
+    hasVideoDecoder: 'VideoDecoder' in window,
+    userAgent: navigator.userAgent
+  });
+  //#endregion debug-point h264-webcodecs-mirror-open
 
   if (!('VideoDecoder' in window)) {
     const secureHint = window.isSecureContext
-      ? '当前浏览器不支持 WebCodecs，已降级截图'
-      : '当前地址不是安全上下文，Chrome 会屏蔽 WebCodecs；请用 http://localhost:3000 或 http://127.0.0.1:3000 打开';
-    showSnapshotMirrorStatus(secureHint);
-    startDeviceMirrorPolling();
+      ? '当前浏览器不支持 WebCodecs'
+      : '当前地址不是安全上下文，Chrome 会屏蔽 WebCodecs；建议用 http://localhost:3000 或 http://127.0.0.1:3000 打开';
+    startNativeScrcpyMirror(secureHint);
     return;
   }
 
@@ -1437,10 +1546,20 @@ function openBrowserScrcpyMirror() {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
+    //#region debug-point h264-webcodecs-mirror-ws-open
+    reportH264MirrorDebug('ws-open', { hypothesisId: 'H1', url: getDeviceMirrorWsUrl() });
+    //#endregion debug-point h264-webcodecs-mirror-ws-open
     showBrowserScrcpyMirrorStatus({ message: '视频流已连接，等待首帧...' });
   };
 
   ws.onmessage = (event) => {
+    //#region debug-point h264-webcodecs-mirror-ws-message
+    reportH264MirrorDebug('ws-message', {
+      hypothesisId: 'H1',
+      kind: typeof event.data,
+      byteLength: typeof event.data === 'string' ? event.data.length : event.data?.byteLength || 0
+    });
+    //#endregion debug-point h264-webcodecs-mirror-ws-message
     if (typeof event.data === 'string') {
       handleDeviceMirrorMessage(event.data);
       return;
@@ -1449,11 +1568,16 @@ function openBrowserScrcpyMirror() {
   };
 
   ws.onerror = () => {
-    showSnapshotMirrorStatus('浏览器视频流连接失败，已降级截图');
-    startDeviceMirrorPolling();
+    //#region debug-point h264-webcodecs-mirror-ws-error
+    reportH264MirrorDebug('ws-error', { hypothesisId: 'H1', readyState: ws.readyState });
+    //#endregion debug-point h264-webcodecs-mirror-ws-error
+    startNativeScrcpyMirror('浏览器视频流连接失败');
   };
 
   ws.onclose = () => {
+    //#region debug-point h264-webcodecs-mirror-ws-close
+    reportH264MirrorDebug('ws-close', { hypothesisId: 'H1', readyState: ws.readyState, mode: deviceMirrorState.mode });
+    //#endregion debug-point h264-webcodecs-mirror-ws-close
     if (deviceMirrorState.mode === 'browser-scrcpy') {
       $('#device-mirror-status').textContent = '视频流已关闭';
     }
@@ -1492,6 +1616,15 @@ function handleDeviceMirrorMessage(raw) {
 
   if (message.type === 'info') {
     deviceMirrorState.videoInfo = message;
+    //#region debug-point h264-webcodecs-mirror-info
+    reportH264MirrorDebug('mirror-info', {
+      hypothesisId: 'H4',
+      deviceName: message.deviceName,
+      codec: message.codec,
+      width: message.width,
+      height: message.height
+    });
+    //#endregion debug-point h264-webcodecs-mirror-info
     const canvas = $('#device-mirror-canvas');
     if (canvas) {
       canvas.width = message.width || 360;
@@ -1507,8 +1640,7 @@ function handleDeviceMirrorMessage(raw) {
   }
 
   if (message.type === 'error') {
-    showSnapshotMirrorStatus(message.error || '浏览器视频流启动失败，已降级截图');
-    startDeviceMirrorPolling();
+    startNativeScrcpyMirror(message.error || '浏览器视频流启动失败');
     return;
   }
 
@@ -1519,6 +1651,16 @@ function handleDeviceMirrorMessage(raw) {
 
 function handleDeviceMirrorFrame(data) {
   const bytes = new Uint8Array(data);
+  //#region debug-point h264-webcodecs-mirror-frame
+  reportH264MirrorDebug('frame-received', {
+    hypothesisId: 'H1',
+    bytes: bytes.length,
+    keyframe: bytes[0] === 1,
+    hasInfo: Boolean(deviceMirrorState.videoInfo),
+    decoderState: deviceMirrorState.decoder?.state || 'none',
+    frameCount: deviceMirrorState.frameCount
+  });
+  //#endregion debug-point h264-webcodecs-mirror-frame
   if (bytes.length <= 1 || !deviceMirrorState.videoInfo) return;
 
   const keyframe = bytes[0] === 1;
@@ -1527,8 +1669,7 @@ function handleDeviceMirrorFrame(data) {
     ensureDeviceMirrorDecoder(payload);
   } catch (error) {
     console.warn('投屏 VideoDecoder 初始化失败:', error.message);
-    showSnapshotMirrorStatus('视频解码初始化失败，已降级截图');
-    startDeviceMirrorPolling();
+    startNativeScrcpyMirror('视频解码初始化失败');
     return;
   }
   if (!deviceMirrorState.decoder || deviceMirrorState.decoder.state !== 'configured') return;
@@ -1539,10 +1680,22 @@ function handleDeviceMirrorFrame(data) {
       timestamp: deviceMirrorState.frameCount * 33333,
       data: payload,
     }));
+    //#region debug-point h264-webcodecs-mirror-decode
+    reportH264MirrorDebug('decode-submitted', {
+      hypothesisId: 'H2',
+      keyframe,
+      payloadBytes: payload.length,
+      decoderState: deviceMirrorState.decoder?.state,
+      frameCount: deviceMirrorState.frameCount
+    });
+    //#endregion debug-point h264-webcodecs-mirror-decode
     deviceMirrorState.frameCount += 1;
     $('#device-mirror-status').textContent = `实时视频流 · ${deviceMirrorState.frameCount} 帧`;
   } catch (error) {
     console.warn('投屏视频解码失败:', error.message);
+    //#region debug-point h264-webcodecs-mirror-decode-error
+    reportH264MirrorDebug('decode-throw', { hypothesisId: 'H2', message: error.message, name: error.name });
+    //#endregion debug-point h264-webcodecs-mirror-decode-error
   }
 }
 
@@ -1559,6 +1712,16 @@ function ensureDeviceMirrorDecoder(firstFrame) {
     output(frame) {
       const target = $('#device-mirror-canvas');
       const context = deviceMirrorState.canvasContext || target?.getContext('2d');
+      //#region debug-point h264-webcodecs-mirror-output
+      reportH264MirrorDebug('decoder-output', {
+        hypothesisId: 'H3',
+        displayWidth: frame.displayWidth,
+        displayHeight: frame.displayHeight,
+        canvasFound: Boolean(target),
+        contextFound: Boolean(context),
+        canvasHidden: target?.classList.contains('hidden') || false
+      });
+      //#endregion debug-point h264-webcodecs-mirror-output
       if (target && context) {
         if (target.width !== frame.displayWidth || target.height !== frame.displayHeight) {
           target.width = frame.displayWidth;
@@ -1571,8 +1734,7 @@ function ensureDeviceMirrorDecoder(firstFrame) {
     },
     error(error) {
       console.warn('投屏 VideoDecoder 错误:', error.message);
-      showSnapshotMirrorStatus('视频解码失败，已降级截图');
-      startDeviceMirrorPolling();
+      startNativeScrcpyMirror('视频解码失败');
     }
   });
 
@@ -2574,16 +2736,17 @@ async function startAnalysis() {
   state.currentSessionId = null;
   state.chatHistory = [];
   state.selectedCategory = null;
+  state.projectName = '';
+  state.requirementName = getMindMapRootTitle();
+  state.requirementVersion = 'V1.0';
   
   switchView('engine');
   if (state.canvas) state.canvas.clear();
   state.categories = [];
   renderCanvasModuleNav();
   
-  // 显示需求摘要
-  const summary = state.requirement.length > 40 ? 
-    state.requirement.substring(0, 40) + '...' : state.requirement;
-  $('#requirement-summary').textContent = summary;
+  // 显示需求/项目信息
+  updateEngineHeaderMeta();
   
   const chatArea = $('#scout-chat');
   
@@ -2789,6 +2952,7 @@ async function startAnalysis() {
       
       // 保存会话
       await saveSession(totalCases);
+      updateEngineHeaderMeta();
       
       // 显示画布对话条
       showCanvasChat();
@@ -4361,8 +4525,14 @@ function analyzeCoverage(categories) {
 
 // ========== 用例编辑弹窗 ==========
 function showEditCaseModal(node) {
-  const steps = node.children?.filter(c => c.type === 'step').map(c => c.title) || [];
-  const expected = node.children?.find(c => c.type === 'expected')?.title || '';
+  const matched = findCaseById(node.id);
+  const caseData = matched?.caseData || {};
+  const steps = Array.isArray(caseData.steps)
+    ? caseData.steps
+    : (node.children?.filter(c => c.type === 'step').map(c => c.title) || []);
+  const expected = caseData.expected || findExpectedInNode(node);
+  const title = caseData.title || node.title || '';
+  const priority = caseData.priority || node.priority || 'P1';
   
   const modal = document.createElement('div');
   modal.className = 'fixed inset-0 z-50 flex items-center justify-center';
@@ -4381,23 +4551,23 @@ function showEditCaseModal(node) {
       <div class="p-5 space-y-4">
         <div>
           <label class="block text-xs text-zinc-500 mb-1">用例标题</label>
-          <input id="edit-case-title" type="text" class="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:border-zinc-400" value="${this.escapeHtml(node.title)}">
+          <input id="edit-case-title" type="text" class="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:border-zinc-400" value="${escapeHtml(title)}">
         </div>
         <div>
           <label class="block text-xs text-zinc-500 mb-1">测试步骤</label>
-          <textarea id="edit-case-steps" class="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm resize-none focus:outline-none focus:border-zinc-400" rows="4" placeholder="每行一个步骤">${steps.join('\n')}</textarea>
+          <textarea id="edit-case-steps" class="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm resize-none focus:outline-none focus:border-zinc-400" rows="4" placeholder="每行一个步骤">${escapeHtml(steps.join('\n'))}</textarea>
         </div>
         <div>
           <label class="block text-xs text-zinc-500 mb-1">预期结果</label>
-          <textarea id="edit-case-expected" class="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm resize-none focus:outline-none focus:border-zinc-400" rows="2">${expected}</textarea>
+          <textarea id="edit-case-expected" class="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm resize-none focus:outline-none focus:border-zinc-400" rows="2">${escapeHtml(expected)}</textarea>
         </div>
         <div>
           <label class="block text-xs text-zinc-500 mb-1">优先级</label>
           <select id="edit-case-priority" class="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:border-zinc-400">
-            <option value="P0" ${node.priority === 'P0' ? 'selected' : ''}>P0 - 最高</option>
-            <option value="P1" ${node.priority === 'P1' ? 'selected' : ''}>P1 - 高</option>
-            <option value="P2" ${node.priority === 'P2' ? 'selected' : ''}>P2 - 中</option>
-            <option value="P3" ${node.priority === 'P3' ? 'selected' : ''}>P3 - 低</option>
+            <option value="P0" ${priority === 'P0' ? 'selected' : ''}>P0 - 最高</option>
+            <option value="P1" ${priority === 'P1' ? 'selected' : ''}>P1 - 高</option>
+            <option value="P2" ${priority === 'P2' ? 'selected' : ''}>P2 - 中</option>
+            <option value="P3" ${priority === 'P3' ? 'selected' : ''}>P3 - 低</option>
           </select>
         </div>
       </div>
@@ -4436,9 +4606,12 @@ function showEditCaseModal(node) {
       }, { persist: false });
       if (!updated) throw new Error('找不到对应的用例数据');
 
-      await persistCurrentSession();
       modal.remove();
       addIslandMessage('system', '用例已更新并保存');
+      persistCurrentSession().catch(error => {
+        console.error('保存用例修改失败:', error);
+        addIslandMessage('system', `用例修改未保存：${error.message}`);
+      });
     } catch (error) {
       saveButton.disabled = false;
       saveButton.textContent = '保存';
@@ -4643,7 +4816,7 @@ function openExecutionReport(reportId) {
         </div>
         <button class="close-execution-report text-zinc-400 hover:text-zinc-700 text-xl">×</button>
       </div>
-      <iframe title="自动化测试报告" src="${API_BASE}/reports/${encodeURIComponent(reportId)}/html" class="w-full flex-1 border-0 bg-zinc-50"></iframe>
+      <iframe title="自动化测试报告" src="/reports.html?id=${encodeURIComponent(reportId)}&t=${Date.now()}" class="w-full flex-1 border-0 bg-zinc-50"></iframe>
     </div>
   `;
   document.body.appendChild(modal);
@@ -5513,6 +5686,12 @@ function showEditSessionModal(session, historyModal) {
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || '保存失败');
+      if (state.currentSessionId === session.id) {
+        state.projectName = updates.projectName;
+        state.requirementName = updates.requirementName || updates.title;
+        state.requirementVersion = updates.requirementVersion;
+        updateEngineHeaderMeta();
+      }
       close();
       historyModal.remove();
       loadSessionHistory();
@@ -5555,6 +5734,7 @@ function loadSession(session) {
     state.canvas.setMindMap(state.mindMap);
     state.canvas.fitToView();
     renderCanvasModuleNav();
+    updateEngineHeaderMeta();
     
     // 隐藏引擎中心
     const engineCenter = $('#engine-center');

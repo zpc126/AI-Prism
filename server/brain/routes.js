@@ -264,10 +264,12 @@ router.post('/recall', (req, res) => {
  */
 router.post('/dream', async (req, res) => {
   try {
-    // 简单的 LLM 调用（这里用 fetch 调用外部 LLM）
+    const { callLLM } = require('../ai/generate');
     const llmCall = async (prompt) => {
-      // TODO: 接入实际的 LLM
-      return prompt; // 暂时返回原文
+      return callLLM(
+        '你是 Prism 的知识整理助手。请把输入内容压缩为可复用的测试知识、规则、模块关系和风险洞察，输出简洁中文。',
+        prompt
+      );
     };
     
     const results = await dream(llmCall);

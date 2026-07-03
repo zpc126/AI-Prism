@@ -3,7 +3,8 @@
 // position: 智能测试执行器，理解意图、检索知识、规划路径、自主执行
 
 const { PIAgent } = require('../pi/pi-agent');
-const { recallWithAssociations } = require('../brain/recall');
+const { recallWithAssociations, recordRecallUsage } = require('../brain/recall');
+const { getAllFragments } = require('../brain/fragments');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -330,6 +331,9 @@ class PIEngineRunner {
       const knowledge = this.retrieveKnowledge(testCase);
       if (knowledge.fragments.length > 0) {
         onLog({ type: 'info', text: `从大脑找到 ${knowledge.fragments.length} 条相关知识` });
+        if (knowledge.executionFragments.length > 0) {
+          onLog({ type: 'info', text: `已注入 ${knowledge.executionFragments.length} 条入口/账号执行知识` });
+        }
         if (knowledge.urls.length > 0) {
           onLog({ type: 'info', text: `相关 URL: ${knowledge.urls.join(', ')}` });
         }
@@ -523,7 +527,7 @@ class PIEngineRunner {
       ...(testCase.steps || [])
     ].filter(Boolean).join(' ');
 
-    const fragments = recallWithAssociations(query, { limit: 10 }).filter(fragment => {
+    const semanticFragments = recallWithAssociations(query, { limit: 12 }).filter(fragment => {
       const content = fragment.content || '';
       const matchesHierarchy = [testCase.productName, testCase.moduleName, testCase.category]
         .filter(Boolean)
@@ -543,6 +547,12 @@ class PIEngineRunner {
       }
       return matchesHierarchy || targetHosts.size === 0;
     });
+    const executionFragments = this.retrieveExecutionKnowledge(testCase, query, semanticFragments, targetHosts);
+    const fragmentById = new Map();
+    [...executionFragments, ...semanticFragments].forEach(fragment => {
+      if (!fragmentById.has(fragment.id)) fragmentById.set(fragment.id, fragment);
+    });
+    const fragments = [...fragmentById.values()].slice(0, 16);
 
     const urls = [];
     const accounts = [];
@@ -554,18 +564,161 @@ class PIEngineRunner {
       const urlMatch = content.match(/https?:\/\/[^\s，。、；]+/);
       if (urlMatch) urls.push(urlMatch[0]);
       // 提取账号信息
-      if (/(账号|密码|登录|用户名|管理员)/i.test(content)) accounts.push(content);
+      const credentialSnippet = this.extractCredentialSnippet(content);
+      if (credentialSnippet) accounts.push(credentialSnippet);
       // 提取操作提示
       if (/(注意|提示|技巧|方法|步骤|先|然后|最后)/i.test(content)) tips.push(content);
     });
+    if (fragments.length > 0) {
+      recordRecallUsage(fragments.map(fragment => fragment.id));
+    }
+
+    const uniqueUrls = [...new Set(urls)];
 
     return {
       fragments,
-      urls: [...new Set(urls)],
-      accounts,
+      executionFragments,
+      urls: uniqueUrls,
+      preferredUrl: uniqueUrls[0] || '',
+      accounts: [...new Set(accounts)],
       tips,
-      raw: fragments.map(f => f.content).join('\n')
+      executionRaw: executionFragments.map(f => this.formatKnowledgeFragment(f)).join('\n'),
+      raw: fragments.map(f => this.formatKnowledgeFragment(f)).join('\n')
     };
+  }
+
+  retrieveExecutionKnowledge(testCase, query, semanticFragments = [], targetHosts = new Set()) {
+    const needsWebEntry = /(web|Web|后台|测试入口|入口|登录|账号|密码|目录|URL|地址)/i.test(query);
+    if (!needsWebEntry) return [];
+
+    const existingIds = new Set(semanticFragments.map(fragment => fragment.id));
+    const hierarchyTerms = [
+      testCase.productName,
+      testCase.moduleName,
+      testCase.category,
+      'Web',
+      'web',
+      '后台',
+      '测试入口',
+      '入口',
+      '登录',
+      '账号',
+      '密码',
+      'URL',
+      '地址',
+      '供应链',
+      '供应链系统',
+      '供应链后台',
+      'Web目录',
+    ].filter(Boolean);
+    const exactPhrases = [
+      'Web 测试入口',
+      'web测试入口',
+      '测试入口',
+      '后台地址',
+      '访问地址',
+      '供应链系统后台',
+      '供应链后台',
+      '账号',
+      '密码',
+      '登录',
+    ];
+
+    const candidates = getAllFragments({ limit: 1000 })
+      .filter(fragment => !existingIds.has(fragment.id))
+      .map(fragment => {
+        const content = fragment.content || '';
+        const tags = Array.isArray(fragment.tags) ? fragment.tags : [];
+        const haystack = `${content}\n${tags.join(' ')}`;
+        const hasUrl = /https?:\/\//i.test(content);
+        const hasAccount = this.isCredentialKnowledge(content);
+        const hasEntry = /(测试入口|后台入口|后台地址|访问地址|web测试入口|Web 测试入口|URL|地址)/i.test(haystack);
+        const isHistoryCase = tags.includes('历史用例') || /【历史测试用例】/.test(content);
+        if (!hasUrl && !hasAccount && !hasEntry) return null;
+
+        let score = 0;
+        if (hasUrl) score += 4;
+        if (hasEntry) score += 3;
+        if (hasAccount) score += 2;
+        exactPhrases.forEach(phrase => {
+          if (haystack.includes(phrase)) score += 2;
+        });
+        hierarchyTerms.forEach(term => {
+          if (term && haystack.includes(term)) score += 0.8;
+        });
+        if (fragment.source === 'learned' || fragment.source === 'manual') score += 1.2;
+        if (fragment.source === 'dream') score -= 0.4;
+        if (isHistoryCase && !hasUrl && !hasAccount) score -= 8;
+
+        const fragmentUrls = content.match(/https?:\/\/[^\s，。、；]+/g) || [];
+        const matchesTargetHost = fragmentUrls.some(url => {
+          try {
+            return targetHosts.has(new URL(url).host);
+          } catch {
+            return false;
+          }
+        });
+        if (targetHosts.size > 0 && fragmentUrls.length > 0 && !matchesTargetHost) {
+          score -= 3;
+        }
+
+        return { ...fragment, score };
+      })
+      .filter(Boolean)
+      .filter(fragment => fragment.score >= 1);
+
+    const preferredSystems = new Set();
+    candidates.forEach(fragment => {
+      const haystack = `${fragment.content || ''}\n${(fragment.tags || []).join(' ')}`;
+      const entryPattern = '(web测试入口|Web 测试入口|测试入口|后台入口)';
+      if (new RegExp(`${entryPattern}.{0,40}供应链|供应链.{0,40}${entryPattern}`, 'i').test(haystack)) {
+        preferredSystems.add('供应链');
+      }
+      if (new RegExp(`${entryPattern}.{0,40}(工厂|分拣仓)|(工厂|分拣仓).{0,40}${entryPattern}`, 'i').test(haystack)) {
+        preferredSystems.add('工厂');
+      }
+    });
+
+    candidates.forEach(fragment => {
+      if (preferredSystems.size === 0 || !/https?:\/\//i.test(fragment.content || '')) return;
+      const haystack = `${fragment.content || ''}\n${(fragment.tags || []).join(' ')}`;
+      const matchesPreferred = [...preferredSystems].some(system => haystack.includes(system));
+      fragment.score += matchesPreferred ? 2.5 : -8;
+    });
+
+    return candidates
+      .filter(fragment => fragment.score >= 4)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+  }
+
+  formatKnowledgeFragment(fragment) {
+    const tags = Array.isArray(fragment.tags) && fragment.tags.length
+      ? `标签：${fragment.tags.slice(0, 8).join('、')}\n`
+      : '';
+    return `- 来源：${fragment.source || 'unknown'} #${fragment.id}\n${tags}${fragment.content}`;
+  }
+
+  isCredentialKnowledge(content = '') {
+    return Boolean(this.extractCredentialSnippet(content));
+  }
+
+  extractCredentialSnippet(content = '') {
+    const adminPair = /admin\s*[/,，\s]+\s*admin123/i.exec(content);
+    if (adminPair) return '账号：admin / 密码：admin123';
+
+    const snippets = [];
+    String(content)
+      .split(/[\n。；;]/)
+      .forEach(segment => {
+        if (segment.length > 120) return;
+        const account = /((登录)?账号|用户名|用户)\s*(是|为|:|：|=)\s*([a-zA-Z0-9_@.-]{3,})/i.exec(segment);
+        const password = /密码\s*(是|为|:|：|=)\s*([a-zA-Z0-9_@.-]{3,})/i.exec(segment);
+        if (account) snippets.push(`账号：${account[4]}`);
+        if (password) snippets.push(`密码：${password[2]}`);
+      });
+    if (snippets.length === 0) return '';
+    return [...new Set(snippets)].join(' / ');
   }
 
   // 让 PI Agent 自主执行
@@ -649,6 +802,21 @@ ${testCase.steps?.map((s, i) => `${i + 1}. ${s}`).join('\n') || '无具体步骤
 ${testCase.expected || '操作成功完成'}
 
 `;
+
+    if (knowledge.executionRaw) {
+      prompt += `【优先执行知识：入口、URL、账号、登录】
+这些知识优先级高于历史用例。遇到“打开 Web 测试入口 / 打开后台 / 登录后台”时，先使用这里的入口映射和 URL。
+${knowledge.executionRaw}
+
+`;
+    }
+
+    if (knowledge.preferredUrl) {
+      prompt += `【首选测试入口 URL】
+${knowledge.preferredUrl}
+
+`;
+    }
 
     // 添加大脑知识
     if (knowledge.raw) {
@@ -738,6 +906,11 @@ ${productName
       console.error('截图失败:', e);
       return null;
     }
+  }
+
+  async captureFrame() {
+    const { captureFrame } = require('../pi/tools/browser');
+    return await captureFrame();
   }
 
   // 关闭

@@ -17,6 +17,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 const crypto = require('crypto');
 const { loadConfig, saveWebConfig } = require('./config');
 const { generateCases, generateCasesStream, analyzeRequirement, analyzeRequirementStream, callLLM, understandImage, extractRequirementFromImage } = require('./ai/generate');
@@ -37,6 +38,7 @@ let gepRoutes;
 let parserRoutes;
 let evalRoutes;
 let deviceRoutes;
+let gitlabRoutes;
 
 try {
   brainRoutes = require('./brain/routes');
@@ -92,6 +94,13 @@ try {
 } catch (e) {
   console.error('设备路由加载失败:', e.message);
   deviceRoutes = express.Router();
+}
+
+try {
+  gitlabRoutes = require('./integrations/gitlab/routes');
+} catch (e) {
+  console.error('GitLab 路由加载失败:', e.message);
+  gitlabRoutes = express.Router();
 }
 
 let piRoutes;
@@ -278,7 +287,17 @@ app.use(cors());
 app.use(express.json({ limit: '70mb' }));
 
 // 静态文件服务
-app.use(express.static(path.join(__dirname, '../src')));
+app.use(express.static(path.join(__dirname, '../src'), {
+  etag: false,
+  lastModified: false,
+  setHeaders(res, filePath) {
+    if (/\.(html|js|css)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  },
+}));
 
 // 大脑路由
 app.use('/api/brain', brainRoutes);
@@ -303,6 +322,9 @@ app.use('/api/eval', evalRoutes);
 
 // Android 真机设备管理
 app.use('/api/device', deviceRoutes);
+
+// GitLab Issue 集成
+app.use('/api/gitlab', gitlabRoutes);
 
 // PI Agent 路由
 app.use('/api/pi', piRoutes);
@@ -988,9 +1010,26 @@ app.get('/api/execute/:taskId', (req, res) => {
   res.json({ taskId, status: 'pending' });
 });
 
+function getChatCompletionsRequestUrl(baseUrl, requestUrl) {
+  const manual = String(requestUrl || '').trim();
+  if (manual) return manual;
+  const normalized = String(baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  if (/\/chat\/completions$/i.test(normalized)) return normalized;
+  return `${normalized}/chat/completions`;
+}
+
+function getAnthropicMessagesRequestUrl(baseUrl, requestUrl) {
+  const manual = String(requestUrl || '').trim();
+  if (manual) return manual;
+  const normalized = String(baseUrl || 'https://api.anthropic.com').replace(/\/+$/, '');
+  if (/\/messages$/i.test(normalized)) return normalized;
+  if (/\/v1$/i.test(normalized)) return `${normalized}/messages`;
+  return `${normalized}/v1/messages`;
+}
+
 // 测试 LLM 连接
 app.post('/api/test-connection', async (req, res) => {
-  const { provider, apiKey, baseUrl, endpoint, deploymentName, model } = req.body;
+  const { provider, apiKey, baseUrl, requestUrl, endpoint, deploymentName, model } = req.body;
   
   try {
     let testResult = false;
@@ -998,34 +1037,75 @@ app.post('/api/test-connection', async (req, res) => {
     switch (provider) {
       case 'openai':
       case 'custom': {
-        const OpenAI = require('openai');
-        const client = new OpenAI({
-          apiKey,
-          baseURL: baseUrl || 'https://api.openai.com/v1'
+        const normalizedBaseUrl = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+        const finalRequestUrl = getChatCompletionsRequestUrl(normalizedBaseUrl, requestUrl);
+        if (!model) throw new Error('请填写模型名称');
+        const headers = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        };
+        if (normalizedBaseUrl.includes('mimo') || normalizedBaseUrl.includes('xiaomi')) {
+          headers['api-key'] = apiKey;
+        }
+        const response = await fetch(finalRequestUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 1,
+            temperature: 0
+          })
         });
-        // 发送一个简单的请求测试连接
-        await client.models.list();
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text.slice(0, 300) || `HTTP ${response.status}`);
+        }
         testResult = true;
         break;
       }
       case 'anthropic': {
-        try {
-          const Anthropic = require('@anthropic-ai/sdk');
-          const client = new Anthropic({ apiKey });
-          // 简单测试
-          testResult = true;
-        } catch (e) {
-          throw new Error('需要安装 @anthropic-ai/sdk: npm install @anthropic-ai/sdk');
+        if (!model) throw new Error('请填写模型名称');
+        const finalRequestUrl = getAnthropicMessagesRequestUrl(baseUrl, requestUrl);
+        const response = await fetch(finalRequestUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'ping' }]
+          })
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text.slice(0, 300) || `HTTP ${response.status}`);
         }
+        testResult = true;
         break;
       }
       case 'azure': {
-        const OpenAI = require('openai');
-        const client = new OpenAI({
-          apiKey,
-          baseURL: `${endpoint}/openai/deployments/${deploymentName}`
+        if (!endpoint || !deploymentName) throw new Error('请填写 Azure Endpoint 和 Deployment Name');
+        const normalizedEndpoint = endpoint.replace(/\/+$/, '');
+        const response = await fetch(`${normalizedEndpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=2024-02-15-preview`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'api-key': apiKey
+          },
+          body: JSON.stringify({
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 1,
+            temperature: 0
+          })
         });
-        await client.models.list();
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text.slice(0, 300) || `HTTP ${response.status}`);
+        }
         testResult = true;
         break;
       }
@@ -1050,8 +1130,14 @@ function startServer(
   host = process.env.HOST || '0.0.0.0'
 ) {
   return new Promise((resolve) => {
-    const server = app.listen(port, host, () => {
-      console.log(`Prism Web running on http://${host}:${port}`);
+    const useHttps = process.env.HTTPS === '1' || process.env.HTTPS === 'true';
+    const protocol = useHttps ? 'https' : 'http';
+    let server;
+    const onListen = () => {
+      console.log(`Prism Web running on ${protocol}://${host}:${port}`);
+      if (useHttps && host === '0.0.0.0') {
+        console.log(`Local HTTPS URL: https://localhost:${port}`);
+      }
       
       // 初始化评估 WebSocket
       try {
@@ -1071,7 +1157,22 @@ function startServer(
       }
       
       resolve(server);
-    });
+    };
+
+    if (useHttps) {
+      const keyPath = process.env.SSL_KEY || path.join(__dirname, '../certs/localhost-key.pem');
+      const certPath = process.env.SSL_CERT || path.join(__dirname, '../certs/localhost-cert.pem');
+      if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
+        throw new Error(`HTTPS 证书不存在，请先执行 npm run cert:local 或配置 SSL_KEY/SSL_CERT。缺少：${keyPath} ${certPath}`);
+      }
+      server = https.createServer({
+        key: fs.readFileSync(keyPath),
+        cert: fs.readFileSync(certPath),
+      }, app).listen(port, host, onListen);
+      return;
+    }
+
+    server = app.listen(port, host, onListen);
   });
 }
 

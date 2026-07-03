@@ -36,6 +36,15 @@ npm run dev
 
 打开 [http://127.0.0.1:3000](http://127.0.0.1:3000)，进入右上角“设置”填写模型配置。
 
+如果需要浏览器内手机投屏（scrcpy + WebCodecs），建议启动 HTTPS 开发模式：
+
+```bash
+npm run cert:local
+npm run dev:https
+```
+
+然后打开 [https://localhost:3443](https://localhost:3443)。首次访问自签名证书时，浏览器会提示不安全，选择继续访问即可。
+
 也可以复制环境变量模板，通过 `.env` 配置：
 
 ```bash

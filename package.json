@@ -5,6 +5,8 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "npm run build:css && NODE_ENV=development node server/index.js",
+    "dev:https": "npm run build:css && HTTPS=1 PORT=3443 NODE_ENV=development node server/index.js",
+    "cert:local": "mkdir -p certs && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout certs/localhost-key.pem -out certs/localhost-cert.pem",
     "build:css": "npx tailwindcss -i ./src/styles/tailwind-input.css -o ./src/styles/tailwind-output.css --minify",
     "build": "npm run build:css",
     "test": "echo \"Error: no test specified\" && exit 1"

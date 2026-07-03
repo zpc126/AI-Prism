@@ -108,6 +108,11 @@ class EnhancedRunner {
     }
   }
 
+  async captureFrame() {
+    if (!this.page || this.page.isClosed()) return null;
+    return await this.page.screenshot({ type: 'png', fullPage: false });
+  }
+
   // 执行单个测试用例
   async executeTestCase(testCase, onLog) {
     const startTime = Date.now();

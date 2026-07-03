@@ -7,8 +7,11 @@ const path = require('path');
 const { jsonrepair } = require('jsonrepair');
 const { getLLMConfig } = require('../config');
 
-function getChatCompletionsUrl(baseUrl) {
+function getChatCompletionsUrl(baseUrl, requestUrl) {
+  const manual = String(requestUrl || '').trim();
+  if (manual) return manual;
   const normalized = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  if (/\/chat\/completions$/i.test(normalized)) return normalized;
   try {
     const url = new URL(normalized);
     if (!url.pathname || url.pathname === '/') {
@@ -17,6 +20,239 @@ function getChatCompletionsUrl(baseUrl) {
     }
   } catch (e) {}
   return `${normalized}/chat/completions`;
+}
+
+function getAnthropicMessagesUrl(baseUrl, requestUrl) {
+  const manual = String(requestUrl || '').trim();
+  if (manual) return manual;
+  const normalized = (baseUrl || 'https://api.anthropic.com').replace(/\/+$/, '');
+  if (/\/messages$/i.test(normalized)) return normalized;
+  if (/\/v1$/i.test(normalized)) return `${normalized}/messages`;
+  return `${normalized}/v1/messages`;
+}
+
+function getAzureChatCompletionsUrl(endpoint, deploymentName, requestUrl) {
+  const manual = String(requestUrl || '').trim();
+  if (manual) return manual;
+  const normalized = String(endpoint || '').replace(/\/+$/, '');
+  if (!normalized) throw new Error('当前 Azure 模型未配置 Endpoint');
+  if (/\/chat\/completions(\?.*)?$/i.test(normalized)) return normalized;
+  if (!deploymentName) throw new Error('当前 Azure 模型未配置 Deployment Name');
+  return `${normalized}/openai/deployments/${encodeURIComponent(deploymentName)}/chat/completions?api-version=2024-02-15-preview`;
+}
+
+function extractAnthropicText(data) {
+  return (data.content || [])
+    .map(item => item?.type === 'text' ? item.text : '')
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function parseImageDataUrl(imageBase64) {
+  const value = String(imageBase64 || '').trim();
+  const match = value.match(/^data:([^;,]+);base64,(.+)$/s);
+  if (match) {
+    return {
+      mediaType: match[1],
+      data: match[2].replace(/\s/g, '')
+    };
+  }
+
+  return {
+    mediaType: 'image/png',
+    data: value.replace(/\s/g, '')
+  };
+}
+
+function pickApiErrorMessage(data, rawText, fallback = 'API 调用失败') {
+  if (data?.error?.message) return data.error.message;
+  if (typeof data?.error === 'string') return data.error;
+  if (data?.message) return data.message;
+  return rawText || fallback;
+}
+
+function withVisionHint(message, provider, model) {
+  const lower = String(message || '').toLowerCase();
+  const maybeVisionIssue = /image|vision|multimodal|multi-modal|media|unsupported|not support|不支持|图片|视觉/.test(lower);
+  if (!maybeVisionIssue) return message;
+  return `${message}。当前模型配置为 ${provider || 'unknown'}/${model || 'unknown'}，可能不支持图片输入，或网关要求不同的图片协议。`;
+}
+
+function buildOpenAIHeaders(apiKey, baseUrl) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (String(baseUrl || '').includes('mimo') || String(baseUrl || '').includes('xiaomi')) {
+    headers['api-key'] = apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  return headers;
+}
+
+function buildAnthropicHeaders(apiKey) {
+  return {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01'
+  };
+}
+
+function parseJsonOrThrow(responseText, label, requestEndpoint) {
+  try {
+    return responseText ? JSON.parse(responseText) : null;
+  } catch (e) {
+    throw new Error(`${label}返回了非 JSON 内容，请检查请求 URL（当前：${requestEndpoint}）`);
+  }
+}
+
+function extractOpenAIText(data) {
+  return data?.choices?.[0]?.message?.content || '';
+}
+
+function extractStreamDelta(data, protocol) {
+  if (protocol === 'anthropic') {
+    if (data?.type === 'content_block_delta') return data.delta?.text || '';
+    if (data?.type === 'content_block_start') return data.content_block?.text || '';
+    return '';
+  }
+  return data?.choices?.[0]?.delta?.content || '';
+}
+
+async function readJsonTextResponse(response, requestEndpoint, label, protocol, llmConfig) {
+  const responseText = await response.text();
+  const data = parseJsonOrThrow(responseText, label, requestEndpoint);
+  if (!response.ok) {
+    const message = pickApiErrorMessage(data, responseText, `${label}失败`);
+    console.error(`[LLM] ${label}失败:`, response.status, message);
+    throw new Error(`${label}失败(${response.status})：${message}`);
+  }
+
+  const contentText = protocol === 'anthropic'
+    ? extractAnthropicText(data)
+    : extractOpenAIText(data);
+  if (!contentText) {
+    throw new Error(`${label}未返回可解析的文本内容（当前模型：${llmConfig.provider}/${llmConfig.model}）`);
+  }
+  return contentText;
+}
+
+async function readStreamTextResponse(response, requestEndpoint, label, protocol, llmConfig, onToken = () => {}) {
+  if (!response.ok) {
+    const responseText = await response.text();
+    let data = null;
+    try { data = responseText ? JSON.parse(responseText) : null; } catch (e) {}
+    const message = pickApiErrorMessage(data, responseText, `${label}失败`);
+    console.error(`[LLM] ${label}失败:`, response.status, message);
+    throw new Error(`${label}失败(${response.status})：${message}`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('text/event-stream')) {
+    const contentText = await readJsonTextResponse(response, requestEndpoint, label, protocol, llmConfig);
+    if (contentText) onToken(contentText);
+    return contentText;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let sseBuffer = '';
+  let rawText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    sseBuffer += decoder.decode(value, { stream: true });
+    const lines = sseBuffer.split('\n');
+    sseBuffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (!data || data === '[DONE]') continue;
+
+      try {
+        const json = JSON.parse(data);
+        const delta = extractStreamDelta(json, protocol);
+        if (!delta) continue;
+        rawText += delta;
+        onToken(delta);
+      } catch (e) {}
+    }
+  }
+
+  return rawText;
+}
+
+async function callConfiguredLLMText(systemPrompt, userContent, options = {}) {
+  const llmConfig = getLLMConfig();
+  if (!llmConfig.apiKey) throw new Error('未读取到 API Key，请先在设置中保存模型配置');
+
+  const provider = llmConfig.provider || 'custom';
+  const model = llmConfig.model || llmConfig.deploymentName || 'gpt-4';
+  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+  const temperature = options.temperature ?? 0.3;
+  const label = options.label || '模型调用';
+  let requestEndpoint;
+  let protocol = 'openai';
+  let headers;
+  let body;
+
+  if (provider === 'anthropic') {
+    protocol = 'anthropic';
+    requestEndpoint = getAnthropicMessagesUrl(llmConfig.baseUrl, llmConfig.requestUrl);
+    headers = buildAnthropicHeaders(llmConfig.apiKey);
+    body = {
+      model,
+      max_tokens: options.maxTokens || 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userContent }],
+      temperature
+    };
+    if (options.stream) body.stream = true;
+  } else if (provider === 'azure') {
+    const deploymentName = llmConfig.deploymentName || llmConfig.model;
+    requestEndpoint = getAzureChatCompletionsUrl(llmConfig.endpoint || llmConfig.baseUrl, deploymentName, llmConfig.requestUrl);
+    headers = {
+      'Content-Type': 'application/json',
+      'api-key': llmConfig.apiKey
+    };
+    body = {
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent }
+      ],
+      temperature
+    };
+    if (options.stream) body.stream = true;
+    if (options.maxTokens) body.max_tokens = options.maxTokens;
+  } else {
+    const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
+    requestEndpoint = getChatCompletionsUrl(baseUrl, llmConfig.requestUrl);
+    headers = buildOpenAIHeaders(llmConfig.apiKey, baseUrl);
+    body = {
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent }
+      ],
+      temperature
+    };
+    if (options.stream) body.stream = true;
+    if (options.maxTokens) body.max_tokens = options.maxTokens;
+  }
+
+  const response = await fetchFn(requestEndpoint, {
+    method: 'POST',
+    headers,
+    signal: options.signal,
+    body: JSON.stringify(body)
+  });
+
+  if (options.stream) {
+    return readStreamTextResponse(response, requestEndpoint, label, protocol, llmConfig, options.onToken);
+  }
+  return readJsonTextResponse(response, requestEndpoint, label, protocol, llmConfig);
 }
 
 const SYSTEM_PROMPT = `你是 QA 测试工程师。根据需求生成可自动执行的测试用例。
@@ -220,7 +456,7 @@ function parseMarkedJsonObjects(text, marker) {
 }
 
 // OpenAI / 兼容接口
-async function callOpenAI(content, apiKey, baseUrl, model) {
+async function callOpenAI(content, apiKey, baseUrl, model, requestUrl = '') {
   const baseURL = baseUrl || 'https://api.openai.com/v1';
   
   // 构建消息内容
@@ -253,7 +489,7 @@ async function callOpenAI(content, apiKey, baseUrl, model) {
   
   let response;
   try {
-    response = await fetchFn(getChatCompletionsUrl(baseURL), {
+    response = await fetchFn(getChatCompletionsUrl(baseURL, requestUrl), {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -291,23 +527,37 @@ async function callOpenAI(content, apiKey, baseUrl, model) {
 }
 
 // Anthropic
-async function callAnthropic(content, apiKey, model) {
-  let Anthropic;
-  try {
-    Anthropic = require('@anthropic-ai/sdk');
-  } catch (e) {
-    throw new Error('需要安装: npm install @anthropic-ai/sdk');
-  }
-  
-  const anthropic = new Anthropic({ apiKey });
-  const message = await anthropic.messages.create({
-    model: model || 'claude-3-sonnet-20240229',
-    max_tokens: 4096,
-    system: buildSystemPrompt(),
-    messages: [{ role: 'user', content: `需求：\n${content}` }]
+async function callAnthropic(content, apiKey, model, baseUrl = '', requestUrl = '', systemPrompt = buildSystemPrompt()) {
+  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+  const response = await fetchFn(getAnthropicMessagesUrl(baseUrl, requestUrl), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: model || 'claude-3-sonnet-20240229',
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: `需求：\n${content}` }]
+    })
   });
-  
-  return parseJsonResponse(message.content[0].text);
+
+  const responseText = await response.text();
+  let data;
+  try {
+    data = JSON.parse(responseText);
+  } catch (e) {
+    throw new Error(`Anthropic 接口返回了非 JSON 内容，请检查请求 URL（当前：${getAnthropicMessagesUrl(baseUrl, requestUrl)}）`);
+  }
+  if (!response.ok) {
+    throw new Error(data.error?.message || responseText || 'Anthropic API 调用失败');
+  }
+
+  const contentText = extractAnthropicText(data);
+  if (!contentText) throw new Error('Anthropic 接口未返回可解析的文本内容');
+  return parseJsonResponse(contentText);
 }
 
 // 主函数
@@ -317,28 +567,17 @@ async function generateCases(content) {
   console.log(`LLM 提供商: ${provider}`);
   
   try {
-    let categories;
-    
     if (!llmConfig.apiKey) {
       console.log('未配置 API Key，返回示例用例');
       return generateMockCategories(content);
     }
-    
-    switch (provider) {
-      case 'openai':
-      case 'custom':
-        categories = await callOpenAI(content, llmConfig.apiKey, llmConfig.baseUrl, llmConfig.model);
-        break;
-        
-      case 'anthropic':
-        categories = await callAnthropic(content, llmConfig.apiKey, llmConfig.model);
-        break;
-        
-      default:
-        throw new Error(`不支持的提供商: ${provider}`);
-    }
-    
-    return categories;
+
+    const contentText = await callConfiguredLLMText(
+      buildSystemPrompt(),
+      `需求：\n${content}`,
+      { label: '生成用例模型调用', temperature: 0.3, maxTokens: 4096 }
+    );
+    return parseJsonResponse(contentText);
     
   } catch (error) {
     console.error('AI 生成失败:', error.message);
@@ -389,73 +628,21 @@ function generateMockCategories(content) {
 // 流式生成用例
 async function generateCasesStream(content, onEvent, customSystemPrompt, options = {}) {
   const llmConfig = getLLMConfig();
-  const apiKey = llmConfig.apiKey;
-  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
-  const model = llmConfig.model || 'gpt-4';
+  onEvent('progress', { message: `正在调用当前模型：${llmConfig.provider || 'custom'}/${llmConfig.model || llmConfig.deploymentName || 'unknown'}...` });
 
-  onEvent('progress', { message: '正在调用 AI...' });
-
-  // 使用 node-fetch 或内置 fetch
-  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
-  
-  // 构建请求头（MIMO 用 api-key，其他用 Authorization）
-  const headers = {
-    'Content-Type': 'application/json'
-  };
-  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
-    headers['api-key'] = apiKey;
-  } else {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  }
-
-  const response = await fetchFn(getChatCompletionsUrl(baseUrl), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: customSystemPrompt || buildSystemPrompt() },
-        { role: 'user', content: `需求：\n${content}` }
-      ],
-      stream: true,
-      ...(options.maxTokens ? { max_tokens: options.maxTokens } : {})
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API 调用失败: ${error}`);
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  if (!contentType.includes('text/event-stream')) {
-    const responseText = await response.text();
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      throw new Error(`模型流式接口返回了非 SSE 内容，请检查 Base URL（当前：${baseUrl}）`);
-    }
-    const contentText = data.choices?.[0]?.message?.content;
-    if (!contentText) throw new Error('模型接口未返回可解析的文本内容');
-    if (options.allowEmpty) {
-      const replyMatch = contentText.match(/###REPLY###([^\n]*)/);
-      if (replyMatch?.[1]?.trim()) {
-        onEvent('reply', { text: replyMatch[1].trim() });
-      }
-      onEvent('complete', { categories: [] });
-      return;
-    }
-    onEvent('complete', { categories: parseJsonResponse(contentText) });
+  if (!llmConfig.apiKey) {
+    const categories = generateMockCategories(content);
+    categories.forEach(category => {
+      (category.cases || []).forEach(caseData => {
+        onEvent('case', { case: { ...caseData, category: caseData.category || category.name || category.type } });
+      });
+    });
+    onEvent('complete', { categories });
     return;
   }
 
-  // 处理流式响应 — 分隔符协议
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let tokenBuffer = '';
   let rawText = '';
-  let sseBuffer = '';
   let allCases = [];
   let analysisSent = false;
   let replySent = false;
@@ -464,87 +651,80 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
 
   onEvent('progress', { message: '正在分析需求...' });
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  const handleToken = (delta) => {
+    if (!delta) return;
+    tokenBuffer += delta;
+    rawText += delta;
 
-    sseBuffer += decoder.decode(value, { stream: true });
-    const lines = sseBuffer.split('\n');
-    sseBuffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6);
-      if (data === '[DONE]') continue;
-
-      try {
-        const json = JSON.parse(data);
-        const delta = json.choices?.[0]?.delta?.content;
-        if (!delta) continue;
-
-        tokenBuffer += delta;
-        rawText += delta;
-
-        if (!replySent) {
-          const replyMarkerIdx = tokenBuffer.indexOf('###REPLY###');
-          if (replyMarkerIdx !== -1) {
-            const afterReplyMarker = tokenBuffer.substring(replyMarkerIdx + 11);
-            const replyEnd = afterReplyMarker.indexOf('\n');
-            if (replyEnd !== -1) {
-              const reply = afterReplyMarker.substring(0, replyEnd).trim();
-              if (reply) {
-                onEvent('reply', { text: reply });
-                replySent = true;
-              }
-            }
+    if (!replySent) {
+      const replyMarkerIdx = tokenBuffer.indexOf('###REPLY###');
+      if (replyMarkerIdx !== -1) {
+        const afterReplyMarker = tokenBuffer.substring(replyMarkerIdx + 11);
+        const replyEnd = afterReplyMarker.indexOf('\n');
+        if (replyEnd !== -1) {
+          const reply = afterReplyMarker.substring(0, replyEnd).trim();
+          if (reply) {
+            onEvent('reply', { text: reply });
+            replySent = true;
           }
         }
-
-        // 检测分析结果分隔符
-        const analysisMarkerIdx = tokenBuffer.indexOf('###ANALYSIS###');
-        if (analysisMarkerIdx !== -1 && !analysisSent) {
-          const afterMarker = tokenBuffer.substring(analysisMarkerIdx + 14); // 14 = '###ANALYSIS###'.length
-          const analysisMatch = afterMarker.match(/\{[\s\S]*?\}/);
-          if (analysisMatch) {
-            try {
-              const analysisData = JSON.parse(analysisMatch[0]);
-              if (analysisData.modules && Array.isArray(analysisData.modules)) {
-                console.log('[LLM] 发送分析结果:', analysisData.modules);
-                onEvent('analysis', { modules: analysisData.modules });
-                analysisSent = true;
-              }
-            } catch (e) {}
-          }
-        }
-
-        // 检测用例分隔符
-        while (true) {
-          const markerIdx = tokenBuffer.indexOf('###CASE###');
-          if (markerIdx === -1) break;
-
-          // 分隔符前的内容是上一条用例的剩余部分
-          const before = tokenBuffer.substring(0, markerIdx).trim();
-          tokenBuffer = tokenBuffer.substring(markerIdx + 10); // 10 = '###CASE###'.length
-
-          if (before) {
-            try {
-              const caseData = JSON.parse(before);
-              const caseKey = caseData.id || `${caseData.category || ''}:${caseData.title || ''}`;
-              if (!emittedCases.has(caseKey)) {
-                emittedCases.add(caseKey);
-                allCases.push(caseData);
-                onEvent('case', { case: caseData, totalCases: allCases.length });
-              }
-            } catch (e) {
-              // 上一条 JSON 不完整，跳过
-            }
-          }
-        }
-      } catch (e) {
-        // 忽略解析错误
       }
     }
-  }
+
+    // 检测分析结果分隔符
+    const analysisMarkerIdx = tokenBuffer.indexOf('###ANALYSIS###');
+    if (analysisMarkerIdx !== -1 && !analysisSent) {
+      const afterMarker = tokenBuffer.substring(analysisMarkerIdx + 14); // 14 = '###ANALYSIS###'.length
+      const analysisMatch = afterMarker.match(/\{[\s\S]*?\}/);
+      if (analysisMatch) {
+        try {
+          const analysisData = JSON.parse(analysisMatch[0]);
+          if (analysisData.modules && Array.isArray(analysisData.modules)) {
+            console.log('[LLM] 发送分析结果:', analysisData.modules);
+            onEvent('analysis', { modules: analysisData.modules });
+            analysisSent = true;
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 检测用例分隔符
+    while (true) {
+      const markerIdx = tokenBuffer.indexOf('###CASE###');
+      if (markerIdx === -1) break;
+
+      // 分隔符前的内容是上一条用例的剩余部分
+      const before = tokenBuffer.substring(0, markerIdx).trim();
+      tokenBuffer = tokenBuffer.substring(markerIdx + 10); // 10 = '###CASE###'.length
+
+      if (before) {
+        try {
+          const caseData = JSON.parse(before);
+          const caseKey = caseData.id || `${caseData.category || ''}:${caseData.title || ''}`;
+          if (!emittedCases.has(caseKey)) {
+            emittedCases.add(caseKey);
+            allCases.push(caseData);
+            onEvent('case', { case: caseData, totalCases: allCases.length });
+          }
+        } catch (e) {
+          // 上一条 JSON 不完整，跳过
+        }
+      }
+    }
+  };
+
+  await callConfiguredLLMText(
+    customSystemPrompt || buildSystemPrompt(),
+    `需求：\n${content}`,
+    {
+      label: '生成用例流式模型调用',
+      temperature: 0.3,
+      stream: true,
+      onToken: handleToken,
+      signal: options.signal,
+      maxTokens: options.maxTokens
+    }
+  );
 
   // 处理缓冲区中最后一条（可能没有以分隔符结尾）
   const remaining = tokenBuffer.trim();
@@ -613,153 +793,31 @@ async function generateCasesStream(content, onEvent, customSystemPrompt, options
 
 // 通用 LLM 调用（用于碎片提取等）
 async function callLLM(systemPrompt, userContent) {
-  const llmConfig = getLLMConfig();
-  const apiKey = llmConfig.apiKey;
-  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
-  const model = llmConfig.model || 'gpt-4';
-  
-  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
-  
-  const headers = { 'Content-Type': 'application/json' };
-  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
-    headers['api-key'] = apiKey;
-  } else {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  }
-  
-  const response = await fetchFn(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent }
-      ],
-      temperature: 0.3
-    })
+  return callConfiguredLLMText(systemPrompt, userContent, {
+    label: '通用模型调用',
+    temperature: 0.3,
+    maxTokens: 4096
   });
-  
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || 'API 调用失败');
-  return data.choices[0].message.content;
 }
 
 // 专用分析调用（强制 JSON 输出）
 async function callLLMForAnalysis(systemPrompt, userContent) {
-  const llmConfig = getLLMConfig();
-  const apiKey = llmConfig.apiKey;
-  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
-  const model = llmConfig.model || 'gpt-4';
-  
-  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
-  
-  const headers = { 'Content-Type': 'application/json' };
-  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
-    headers['api-key'] = apiKey;
-  } else {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  }
-  
-  // 尝试使用 response_format 强制 JSON 输出
-  const body = {
-    model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent }
-    ],
-    temperature: 0.1
-  };
-  
-  // 部分 API 支持 response_format，但可能导致错误，暂不使用
-  // if (!baseUrl.includes('mimo') && !baseUrl.includes('xiaomi')) {
-  //   body.response_format = { type: 'json_object' };
-  // }
-  
-  const response = await fetchFn(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body)
+  return callConfiguredLLMText(systemPrompt, userContent, {
+    label: '需求分析模型调用',
+    temperature: 0.1,
+    maxTokens: 4096
   });
-  
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || 'API 调用失败');
-  return data.choices[0].message.content;
 }
 
 async function callLLMForAnalysisStream(systemPrompt, userContent, onToken, options = {}) {
-  const llmConfig = getLLMConfig();
-  const apiKey = llmConfig.apiKey;
-  const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
-  const model = llmConfig.model || 'gpt-4';
-
-  const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
-
-  const headers = { 'Content-Type': 'application/json' };
-  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
-    headers['api-key'] = apiKey;
-  } else {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  }
-
-  const response = await fetchFn(getChatCompletionsUrl(baseUrl), {
-    method: 'POST',
-    headers,
+  return callConfiguredLLMText(systemPrompt, userContent, {
+    label: '需求分析流式模型调用',
+    temperature: 0.1,
+    stream: true,
+    onToken,
     signal: options.signal,
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent }
-      ],
-      temperature: 0.1,
-      stream: true
-    })
+    maxTokens: options.maxTokens || 4096
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || 'API 调用失败');
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  if (!contentType.includes('text/event-stream')) {
-    const responseText = await response.text();
-    const data = JSON.parse(responseText);
-    const content = data.choices?.[0]?.message?.content || '';
-    if (content) onToken(content);
-    return content;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let sseBuffer = '';
-  let rawText = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    sseBuffer += decoder.decode(value, { stream: true });
-    const lines = sseBuffer.split('\n');
-    sseBuffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6).trim();
-      if (!data || data === '[DONE]') continue;
-
-      try {
-        const json = JSON.parse(data);
-        const delta = json.choices?.[0]?.delta?.content || '';
-        if (!delta) continue;
-        rawText += delta;
-        onToken(delta);
-      } catch (e) {}
-    }
-  }
-
-  return rawText;
 }
 
 // 多模态 LLM 调用（支持图片）
@@ -767,9 +825,89 @@ async function callLLMWithImage(systemPrompt, textContent, imageBase64, maxToken
   const llmConfig = getLLMConfig();
   const apiKey = llmConfig.apiKey;
   const baseUrl = llmConfig.baseUrl || 'https://api.openai.com/v1';
+  const requestUrl = llmConfig.requestUrl || '';
   const model = llmConfig.model || 'gpt-4-vision-preview';
   
   const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+
+  if (llmConfig.provider === 'anthropic') {
+    const userContent = [{ type: 'text', text: textContent }];
+    if (imageBase64) {
+      const image = parseImageDataUrl(imageBase64);
+      userContent.unshift({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: image.mediaType,
+          data: image.data
+        }
+      });
+    }
+
+    const requestEndpoint = getAnthropicMessagesUrl(baseUrl, requestUrl);
+    const response = await fetchFn(requestEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userContent }]
+      })
+    });
+
+    const responseText = await response.text();
+    let data = null;
+    try {
+      data = responseText ? JSON.parse(responseText) : null;
+    } catch (e) {
+      throw new Error(`图片识别接口返回了非 JSON 内容，请检查请求 URL（当前：${requestEndpoint}）`);
+    }
+
+    if (!response.ok) {
+      const message = pickApiErrorMessage(data, responseText, 'Anthropic 图片识别调用失败');
+      console.error('[Vision API] Anthropic 调用失败:', response.status, message);
+      throw new Error(`图片识别失败(${response.status})：${withVisionHint(message, llmConfig.provider, model)}`);
+    }
+
+    const contentText = extractAnthropicText(data);
+    if (!contentText) throw new Error('图片识别接口未返回可解析的文本内容');
+    return contentText;
+  }
+
+  if (llmConfig.provider === 'azure') {
+    const userContent = [{ type: 'text', text: textContent }];
+    if (imageBase64) {
+      userContent.push({
+        type: 'image_url',
+        image_url: { url: imageBase64 }
+      });
+    }
+
+    const deploymentName = llmConfig.deploymentName || llmConfig.model;
+    const requestEndpoint = getAzureChatCompletionsUrl(llmConfig.endpoint || baseUrl, deploymentName, requestUrl);
+    const response = await fetchFn(requestEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': apiKey
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent }
+        ],
+        temperature: 0.3,
+        max_tokens: maxTokens
+      })
+    });
+
+    return readJsonTextResponse(response, requestEndpoint, '图片识别模型调用', 'openai', llmConfig);
+  }
   
   const headers = { 'Content-Type': 'application/json' };
   if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
@@ -791,7 +929,8 @@ async function callLLMWithImage(systemPrompt, textContent, imageBase64, maxToken
     });
   }
   
-  const response = await fetchFn(`${baseUrl}/chat/completions`, {
+  const requestEndpoint = getChatCompletionsUrl(baseUrl, requestUrl);
+  const response = await fetchFn(requestEndpoint, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -805,9 +944,23 @@ async function callLLMWithImage(systemPrompt, textContent, imageBase64, maxToken
     })
   });
   
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || 'API 调用失败');
-  return data.choices[0].message.content;
+  const responseText = await response.text();
+  let data = null;
+  try {
+    data = responseText ? JSON.parse(responseText) : null;
+  } catch (e) {
+    throw new Error(`图片识别接口返回了非 JSON 内容，请检查请求 URL（当前：${requestEndpoint}）`);
+  }
+
+  if (!response.ok) {
+    const message = pickApiErrorMessage(data, responseText, 'API 调用失败');
+    console.error('[Vision API] OpenAI 兼容调用失败:', response.status, message);
+    throw new Error(`图片识别失败(${response.status})：${withVisionHint(message, llmConfig.provider, model)}`);
+  }
+
+  const contentText = data?.choices?.[0]?.message?.content;
+  if (!contentText) throw new Error('图片识别接口未返回可解析的文本内容');
+  return contentText;
 }
 
 /**

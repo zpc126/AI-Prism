@@ -85,6 +85,12 @@ router.get('/:id/screenshots/:filename', (req, res) => {
   res.sendFile(filePath);
 });
 
+router.get('/:id/videos/:filename', (req, res) => {
+  const { id, filename } = req.params;
+  const filePath = path.join(REPORTS_DIR, id, filename);
+  res.sendFile(filePath);
+});
+
 /**
  * 生成报告 HTML
  */
@@ -168,8 +174,17 @@ function generateReportHtml(report) {
     `;
   };
   
-  const resultRows = (report.results || []).map((r, i) => {
-    const stepRows = (r.steps || []).map(s => {
+	  const resultRows = (report.results || []).map((r, i) => {
+		    const videoHtml = r.status === 'failed' && r.video_path
+		      ? `<div class="failure-video">
+		          <div class="failure-video-title">失败过程回放</div>
+		          <video controls preload="metadata" src="/api/reports/${report.id}/videos/${path.basename(r.video_path)}"></video>
+		        </div>`
+		      : '';
+		    const issueHtml = r.gitlab_issue?.issue_url
+		      ? `<a class="issue-link" href="${escapeHtml(r.gitlab_issue.issue_url)}" target="_blank" rel="noreferrer">GitLab Issue #${escapeHtml(r.gitlab_issue.issue_iid || '')}</a>`
+		      : '';
+		    const stepRows = (r.steps || []).map(s => {
       const screenshotHtml = s.screenshot_path 
         ? `<div class="step-screenshot"><img src="/api/reports/${report.id}/screenshots/${path.basename(s.screenshot_path)}" alt="截图" title="点击查看截图" loading="lazy" /></div>`
         : '';
@@ -194,16 +209,18 @@ function generateReportHtml(report) {
           <div class="result-info">
             <div class="result-title">${escapeHtml(r.case_title)}</div>
             <div class="result-meta">
-              ${r.category ? `<span class="tag">${escapeHtml(r.category)}</span>` : ''}
-              ${r.priority ? `<span class="tag priority-${r.priority}">${escapeHtml(r.priority)}</span>` : ''}
-              <span class="duration">${durationStr(r.duration_ms)}</span>
-            </div>
+	              ${r.category ? `<span class="tag">${escapeHtml(r.category)}</span>` : ''}
+	              ${r.priority ? `<span class="tag priority-${r.priority}">${escapeHtml(r.priority)}</span>` : ''}
+	              <span class="duration">${durationStr(r.duration_ms)}</span>
+	              ${issueHtml}
+	            </div>
           </div>
         </div>
-        ${renderCaseDetail(r)}
-        ${r.error_message ? `<div class="result-error">${escapeHtml(r.error_message)}</div>` : ''}
-        ${stepRows ? `<div class="result-steps">${stepRows}</div>` : ''}
-      </div>
+	        ${renderCaseDetail(r)}
+	        ${r.error_message ? `<div class="result-error">${escapeHtml(r.error_message)}</div>` : ''}
+	        ${videoHtml}
+	        ${stepRows ? `<div class="result-steps">${stepRows}</div>` : ''}
+	      </div>
     `;
   }).join('');
   
@@ -354,13 +371,22 @@ function generateReportHtml(report) {
       margin-top: 4px;
     }
     
-    .tag {
-      font-size: 12px;
-      padding: 2px 8px;
-      border-radius: 4px;
-      background: #f3f4f6;
-      color: #6b7280;
-    }
+	    .tag {
+	      font-size: 12px;
+	      padding: 2px 8px;
+	      border-radius: 4px;
+	      background: #f3f4f6;
+	      color: #6b7280;
+	    }
+	    
+	    .issue-link {
+	      font-size: 12px;
+	      padding: 2px 8px;
+	      border-radius: 4px;
+	      background: #eef2ff;
+	      color: #4f46e5;
+	      text-decoration: none;
+	    }
     
     .priority-P0 { background: #fef2f2; color: #dc2626; }
     .priority-P1 { background: #fff7ed; color: #ea580c; }
@@ -480,11 +506,34 @@ function generateReportHtml(report) {
       transition: transform 0.2s;
     }
     
-    .step-screenshot img:hover {
-      transform: scale(1.02);
-    }
-    
-    .step-duration {
+	    .step-screenshot img:hover {
+	      transform: scale(1.02);
+	    }
+
+	    .failure-video {
+	      margin: 14px 0 16px 32px;
+	      padding: 12px;
+	      border: 1px solid #fee2e2;
+	      border-radius: 12px;
+	      background: #fff7f7;
+	    }
+
+	    .failure-video-title {
+	      margin-bottom: 8px;
+	      color: #991b1b;
+	      font-size: 13px;
+	      font-weight: 600;
+	    }
+
+	    .failure-video video {
+	      display: block;
+	      width: 100%;
+	      max-height: 520px;
+	      border-radius: 10px;
+	      background: #111827;
+	    }
+	    
+	    .step-duration {
       font-size: 12px;
       color: #9ca3af;
       flex-shrink: 0;

@@ -4,6 +4,7 @@
 
 const { EnhancedRunner } = require('./enhanced-runner');
 const { PIEngineRunner } = require('./pi-engine-runner');
+const { VideoRecorder } = require('./video-recorder');
 const {
   createReport,
   updateReport,
@@ -110,9 +111,10 @@ class BatchExecutor {
           break;
         }
         
-        const testCase = cases[i];
+	        const testCase = cases[i];
+	        let videoRecorder = null;
 
-        onLog({ type: 'system', text: `--- 用例 ${i + 1}/${cases.length} ---` });
+	        onLog({ type: 'system', text: `--- 用例 ${i + 1}/${cases.length} ---` });
 
         // 创建测试结果记录
         const resultId = addTestResult({
@@ -124,17 +126,30 @@ class BatchExecutor {
           caseDetail: testCase,
         });
 
-        try {
-          // 执行用例
-          const result = await this.runner.executeTestCase(testCase, onLog);
+	        try {
+	          videoRecorder = new VideoRecorder({
+	            reportDir: this.reportDir,
+	            caseId: testCase.id || `case_${i + 1}`,
+	            captureFrame: () => this.runner.captureFrame?.(),
+	          });
+	          await videoRecorder.start();
 
-          // 更新测试结果
-          updateTestResult(resultId, {
-            status: result.status,
-            error_message: result.errorMessage,
-            duration_ms: result.durationMs,
-            finished_at: new Date().toISOString(),
-          });
+	          // 执行用例
+	          const result = await this.runner.executeTestCase(testCase, onLog);
+	          const videoPath = await videoRecorder.stop({ keep: result.status === 'failed' });
+	          if (videoPath) {
+	            result.videoPath = videoPath;
+	            onLog({ type: 'system', text: `失败回放视频已保存：${videoPath}` });
+	          }
+
+	          // 更新测试结果
+	          updateTestResult(resultId, {
+	            status: result.status,
+	            error_message: result.errorMessage,
+	            video_path: result.videoPath || null,
+	            duration_ms: result.durationMs,
+	            finished_at: new Date().toISOString(),
+	          });
 
           // 保存步骤
           for (const step of result.steps) {
@@ -166,13 +181,17 @@ class BatchExecutor {
               break;
             }
           }
-        } catch (error) {
-          failedCount++;
-          updateTestResult(resultId, {
-            status: 'failed',
-            error_message: error.message,
-            finished_at: new Date().toISOString(),
-          });
+	        } catch (error) {
+	          const videoPath = videoRecorder
+	            ? await videoRecorder.stop({ keep: true }).catch(() => null)
+	            : null;
+	          failedCount++;
+	          updateTestResult(resultId, {
+	            status: 'failed',
+	            error_message: error.message,
+	            video_path: videoPath || null,
+	            finished_at: new Date().toISOString(),
+	          });
           onLog({ type: 'error', text: `✗ ${testCase.title} 异常: ${error.message}` });
         }
 

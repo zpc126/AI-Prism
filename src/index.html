@@ -18,16 +18,24 @@
       <!-- 右上角按钮组 -->
       <div class="fixed top-5 right-6 z-50 flex items-center gap-2">
         <!-- 设置按钮 -->
-        <button id="btn-settings" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
-          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
-            <circle cx="8" cy="8" r="2.5"/>
-            <path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.93 2.93l1.41 1.41M11.66 11.66l1.41 1.41M2.93 13.07l1.41-1.41M11.66 4.34l1.41-1.41"/>
-          </svg>
-          <span>设置</span>
-        </button>
-        
-        <!-- History 按钮 -->
-        <button id="btn-go-history" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
+	        <button id="btn-settings" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
+	          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+	            <circle cx="8" cy="8" r="2.5"/>
+	            <path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.93 2.93l1.41 1.41M11.66 11.66l1.41 1.41M2.93 13.07l1.41-1.41M11.66 4.34l1.41-1.41"/>
+	          </svg>
+	          <span>设置</span>
+	        </button>
+
+	        <button id="btn-gitlab-settings" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
+	          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+	            <path d="M3 2.5h10a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/>
+	            <path d="M5 5.5h6M5 8h6M5 10.5h3"/>
+	          </svg>
+	          <span>GitLab</span>
+	        </button>
+	        
+	        <!-- History 按钮 -->
+	        <button id="btn-go-history" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
           <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
             <rect x="2" y="2" width="12" height="12" rx="2"/>
             <line x1="5" y1="5" x2="11" y2="5"/>
@@ -220,9 +228,12 @@
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
           </button>
           
-          <div class="flex items-center gap-2 max-w-md">
+          <div class="flex items-center gap-2 max-w-xl">
             <div id="engine-dot" class="w-2.5 h-2.5 rounded-full bg-indigo-500 shrink-0"></div>
-            <p id="requirement-summary" class="text-sm text-zinc-500 truncate"></p>
+            <div class="min-w-0">
+              <p id="requirement-summary" class="text-sm text-zinc-700 truncate font-medium"></p>
+              <p id="requirement-meta" class="text-[10px] text-zinc-400 truncate hidden"></p>
+            </div>
           </div>
         </div>
         
@@ -840,7 +851,7 @@
     
     <!-- 模态框内容 -->
     <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
-      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] overflow-hidden">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden">
         <!-- 头部 -->
         <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-100">
           <h2 class="text-lg font-semibold text-zinc-800">设置</h2>
@@ -853,71 +864,98 @@
         
         <!-- 内容区域 -->
         <div class="px-6 py-4 overflow-y-auto max-h-[calc(80vh-140px)]">
-          <!-- 提供商选择 -->
-          <div class="mb-6">
-            <label class="block text-sm font-medium text-zinc-700 mb-2">模型提供商</label>
-            <div class="grid grid-cols-4 gap-2">
-              <button class="provider-btn px-3 py-2 text-sm rounded-lg border-2 border-zinc-200 hover:border-zinc-300 transition-colors" data-provider="openai">
-                OpenAI
-              </button>
-              <button class="provider-btn px-3 py-2 text-sm rounded-lg border-2 border-zinc-200 hover:border-zinc-300 transition-colors" data-provider="anthropic">
-                Anthropic
-              </button>
-              <button class="provider-btn px-3 py-2 text-sm rounded-lg border-2 border-zinc-200 hover:border-zinc-300 transition-colors" data-provider="azure">
-                Azure
-              </button>
-              <button class="provider-btn px-3 py-2 text-sm rounded-lg border-2 border-zinc-200 hover:border-zinc-300 transition-colors" data-provider="custom">
-                自定义
-              </button>
+          <div class="grid gap-4" style="grid-template-columns: 180px 1fr;">
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm font-medium text-zinc-700">模型列表</label>
+                <button id="btn-add-model" class="px-2 py-1 text-xs font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-md transition-colors">
+                  新增
+                </button>
+              </div>
+              <div id="settings-model-list" class="space-y-2 max-h-[360px] overflow-y-auto pr-1"></div>
+              <p class="mt-2 text-[11px] text-zinc-400">点选一条作为当前使用模型，可随时新增或删除。</p>
             </div>
-          </div>
-          
-          <!-- API Key -->
-          <div class="mb-4">
-            <label class="block text-sm font-medium text-zinc-700 mb-1.5">API Key</label>
-            <input type="password" id="settings-api-key" 
-              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
-              placeholder="sk-xxx">
-          </div>
-          
-          <!-- Base URL (OpenAI/Custom) -->
-          <div id="settings-base-url-group" class="mb-4">
-            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Base URL</label>
-            <input type="text" id="settings-base-url" 
-              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
-              placeholder="https://api.openai.com/v1">
-          </div>
-          
-          <!-- Azure Endpoint -->
-          <div id="settings-azure-endpoint-group" class="mb-4 hidden">
-            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Endpoint</label>
-            <input type="text" id="settings-azure-endpoint" 
-              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
-              placeholder="https://xxx.openai.azure.com/">
-          </div>
-          
-          <!-- Azure Deployment Name -->
-          <div id="settings-azure-deployment-group" class="mb-4 hidden">
-            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Deployment Name</label>
-            <input type="text" id="settings-azure-deployment" 
-              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
-              placeholder="gpt-4">
-          </div>
-          
-          <!-- Model -->
-          <div id="settings-model-group" class="mb-4">
-            <label class="block text-sm font-medium text-zinc-700 mb-1.5">模型</label>
-            <input type="text" id="settings-model" 
-              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
-              placeholder="gpt-4">
-          </div>
-          
-          <!-- 测试连接按钮 -->
-          <div class="mt-6">
-            <button id="btn-test-connection" class="w-full px-4 py-2.5 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors">
-              测试连接
-            </button>
-            <div id="test-connection-result" class="mt-2 text-sm text-center hidden"></div>
+
+            <div class="min-w-0">
+              <div class="flex items-center justify-between mb-3">
+                <div>
+                  <h3 class="text-sm font-semibold text-zinc-800">模型配置</h3>
+                  <p id="settings-active-hint" class="text-[11px] text-zinc-400 mt-0.5">当前模型用于生成用例、对话和智能执行。</p>
+                </div>
+                <button id="btn-delete-model" class="px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-md transition-colors">
+                  删除
+                </button>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label class="block text-sm font-medium text-zinc-700 mb-1.5">配置名称</label>
+                  <input type="text" id="settings-model-name"
+                    class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+                    placeholder="例如：智谱 GLM-5.2">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-zinc-700 mb-1.5">提供商类型</label>
+                  <select id="settings-provider"
+                    class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg bg-white focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all">
+                    <option value="openai">OpenAI 兼容</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="azure">Azure OpenAI</option>
+                    <option value="custom">自定义 / 其它兼容</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="mb-4">
+                <label class="block text-sm font-medium text-zinc-700 mb-1.5">API Key</label>
+                <input type="password" id="settings-api-key"
+                  class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+                  placeholder="sk-xxx">
+              </div>
+
+              <div id="settings-base-url-group" class="mb-4">
+                <label class="block text-sm font-medium text-zinc-700 mb-1.5">Base URL</label>
+                <input type="text" id="settings-base-url"
+                  class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+                  placeholder="https://api.openai.com/v1">
+              </div>
+
+              <div id="settings-request-url-group" class="mb-4">
+                <label class="block text-sm font-medium text-zinc-700 mb-1.5">请求 URL（可选）</label>
+                <input type="text" id="settings-request-url"
+                  class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+                  placeholder="留空则自动使用 Base URL + /chat/completions">
+                <p id="settings-request-url-preview" class="mt-1 text-[11px] text-zinc-400 truncate"></p>
+              </div>
+
+              <div id="settings-azure-endpoint-group" class="mb-4 hidden">
+                <label class="block text-sm font-medium text-zinc-700 mb-1.5">Endpoint</label>
+                <input type="text" id="settings-azure-endpoint"
+                  class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+                  placeholder="https://xxx.openai.azure.com/">
+              </div>
+
+              <div id="settings-azure-deployment-group" class="mb-4 hidden">
+                <label class="block text-sm font-medium text-zinc-700 mb-1.5">Deployment Name</label>
+                <input type="text" id="settings-azure-deployment"
+                  class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+                  placeholder="gpt-4">
+              </div>
+
+              <div id="settings-model-group" class="mb-4">
+                <label class="block text-sm font-medium text-zinc-700 mb-1.5">模型</label>
+                <input type="text" id="settings-model"
+                  class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+                  placeholder="gpt-4 / glm-4.5 / GLM-5.2">
+              </div>
+
+              <div class="mt-6">
+                <button id="btn-test-connection" class="w-full px-4 py-2.5 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors">
+                  测试当前模型
+                </button>
+                <div id="test-connection-result" class="mt-2 text-sm text-center hidden"></div>
+              </div>
+            </div>
           </div>
         </div>
         
@@ -932,14 +970,85 @@
         </div>
       </div>
     </div>
-  </div>
+	  </div>
 
-  <script src="canvas.js"></script>
-  <script src="renderer.js"></script>
-  <script src="script-library.js"></script>
-  <script src="brain.js"></script>
-  <script src="eval.js"></script>
-  <script src="settings.js"></script>
-  <script src="welcome.js"></script>
+	  <!-- ========== GitLab 配置模态框 ========== -->
+	  <div id="gitlab-settings-modal" class="fixed inset-0 z-[120] hidden">
+	    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
+	    <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+	      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+	        <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-100">
+	          <div>
+	            <h2 class="text-lg font-semibold text-zinc-800">GitLab 配置</h2>
+	            <p class="text-xs text-zinc-400 mt-0.5">报告里的用例可以提交到 GitLab Issue</p>
+	          </div>
+	          <button id="btn-gitlab-close" class="p-1 text-zinc-400 hover:text-zinc-600 rounded-lg hover:bg-zinc-100 transition-colors">
+	            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+	              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+	            </svg>
+	          </button>
+	        </div>
+	        <div class="px-6 py-5 space-y-4">
+	          <div>
+	            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Base URL</label>
+	            <input type="text" id="gitlab-base-url"
+	              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+	              placeholder="https://gitlab.com">
+	          </div>
+		          <div>
+		            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Project ID 或 Path</label>
+		            <input type="text" id="gitlab-project-id"
+		              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+		              placeholder="123456 或 group/project">
+		          </div>
+		          <div>
+		            <label class="block text-sm font-medium text-zinc-700 mb-1.5">报告访问地址（可选）</label>
+		            <input type="text" id="gitlab-report-base-url"
+		              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+		              placeholder="http://你的服务器IP:3000">
+		            <p class="mt-1 text-[11px] text-zinc-400">用于写入 GitLab Issue 和复制报告链接，留空则使用当前访问地址。</p>
+		          </div>
+		          <div>
+		            <label class="block text-sm font-medium text-zinc-700 mb-1.5">Access Token</label>
+	            <input type="password" id="gitlab-token"
+	              class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+	              placeholder="需要 api 权限">
+	          </div>
+	          <div class="grid grid-cols-2 gap-3">
+	            <div>
+	              <label class="block text-sm font-medium text-zinc-700 mb-1.5">Labels</label>
+	              <input type="text" id="gitlab-labels"
+	                class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+	                placeholder="bug,Prism">
+	            </div>
+	            <div>
+	              <label class="block text-sm font-medium text-zinc-700 mb-1.5">Assignee IDs</label>
+	              <input type="text" id="gitlab-assignee-ids"
+	                class="w-full px-3 py-2.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-400 focus:ring-1 focus:ring-zinc-400/20 transition-all"
+	                placeholder="12,34">
+	            </div>
+	          </div>
+	          <div id="gitlab-settings-result" class="text-sm text-center hidden"></div>
+	          <p class="text-xs text-zinc-400">Token 会保存在本机 data/gitlab-config.json。留空保存时不覆盖已有 Token。</p>
+	        </div>
+	        <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-zinc-100">
+	          <button id="btn-gitlab-test" class="px-4 py-2 text-sm text-zinc-600 hover:text-zinc-800 rounded-lg hover:bg-zinc-100 transition-colors">
+	            测试连接
+	          </button>
+	          <button id="btn-gitlab-save" class="px-4 py-2 text-sm font-medium text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors">
+	            保存
+	          </button>
+	        </div>
+	      </div>
+	    </div>
+	  </div>
+
+		  <script src="canvas.js?v=20260703-gitlab"></script>
+	  <script src="renderer.js?v=20260703-gitlab"></script>
+	  <script src="script-library.js?v=20260703-gitlab"></script>
+	  <script src="brain.js?v=20260703-gitlab"></script>
+	  <script src="eval.js?v=20260703-gitlab"></script>
+	  <script src="settings.js?v=20260703-gitlab"></script>
+	  <script src="welcome.js?v=20260703-gitlab"></script>
 </body>
 </html>

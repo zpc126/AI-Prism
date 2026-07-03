@@ -18,6 +18,7 @@ data/uploads/
 data/images/
 data/analysis-reports/
 data/config.json
+data/gitlab-config.json
 
 # Screenshots
 server/data/
@@ -31,6 +32,8 @@ test-data/
 .env
 .env.local
 .env.*.local
+certs/*.pem
+.dbg/
 
 # IDE
 .idea/
@@ -46,6 +49,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+debug-*.md
 
 # Tailwind build (auto-generated)
 src/styles/tailwind-output.css

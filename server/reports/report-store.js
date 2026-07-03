@@ -78,8 +78,8 @@ function initTables() {
       FOREIGN KEY (report_id) REFERENCES test_reports(id)
     );
 
-    CREATE TABLE IF NOT EXISTS test_steps (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+	    CREATE TABLE IF NOT EXISTS test_steps (
+	      id INTEGER PRIMARY KEY AUTOINCREMENT,
       result_id INTEGER NOT NULL,
       step_index INTEGER NOT NULL,
       description TEXT NOT NULL,
@@ -89,14 +89,33 @@ function initTables() {
       error_message TEXT,
       duration_ms INTEGER DEFAULT 0,
       timestamp TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (result_id) REFERENCES test_results(id)
-    );
+	      FOREIGN KEY (result_id) REFERENCES test_results(id)
+	    );
 
-    CREATE INDEX IF NOT EXISTS idx_results_report ON test_results(report_id);
-    CREATE INDEX IF NOT EXISTS idx_steps_result ON test_steps(result_id);
-  `);
+	    CREATE TABLE IF NOT EXISTS gitlab_issue_links (
+	      id INTEGER PRIMARY KEY AUTOINCREMENT,
+	      report_id TEXT NOT NULL,
+	      result_id INTEGER NOT NULL,
+	      case_id TEXT,
+	      issue_iid INTEGER,
+	      issue_id INTEGER,
+	      issue_url TEXT NOT NULL,
+	      issue_title TEXT,
+	      fingerprint TEXT,
+	      raw_response TEXT,
+	      created_at TEXT DEFAULT (datetime('now')),
+	      FOREIGN KEY (report_id) REFERENCES test_reports(id),
+	      FOREIGN KEY (result_id) REFERENCES test_results(id)
+	    );
 
-  ensureColumn('test_results', 'case_detail', 'TEXT');
+	    CREATE INDEX IF NOT EXISTS idx_results_report ON test_results(report_id);
+	    CREATE INDEX IF NOT EXISTS idx_steps_result ON test_steps(result_id);
+	    CREATE INDEX IF NOT EXISTS idx_gitlab_issue_report ON gitlab_issue_links(report_id);
+	    CREATE INDEX IF NOT EXISTS idx_gitlab_issue_result ON gitlab_issue_links(result_id);
+	  `);
+
+	  ensureColumn('test_results', 'case_detail', 'TEXT');
+	  ensureColumn('test_results', 'video_path', 'TEXT');
 }
 
 /**
@@ -183,6 +202,7 @@ function updateTestResult(id, updates) {
   
   if (updates.status !== undefined) { sets.push('status = ?'); params.push(updates.status); }
   if (updates.error_message !== undefined) { sets.push('error_message = ?'); params.push(updates.error_message); }
+  if (updates.video_path !== undefined) { sets.push('video_path = ?'); params.push(updates.video_path); }
   if (updates.duration_ms !== undefined) { sets.push('duration_ms = ?'); params.push(updates.duration_ms); }
   if (updates.finished_at !== undefined) { sets.push('finished_at = ?'); params.push(updates.finished_at); }
   
@@ -242,18 +262,31 @@ function getReportDetail(reportId) {
   const report = normalizeReport(db.prepare('SELECT * FROM test_reports WHERE id = ?').get(reportId));
   if (!report) return null;
   
-  const results = db.prepare('SELECT * FROM test_results WHERE report_id = ? ORDER BY id').all(reportId);
-  
-  for (const result of results) {
+	  const results = db.prepare('SELECT * FROM test_results WHERE report_id = ? ORDER BY id').all(reportId);
+	  const issueLinks = db.prepare(`
+	    SELECT *
+	    FROM gitlab_issue_links
+	    WHERE report_id = ?
+	    ORDER BY created_at DESC, id DESC
+	  `).all(reportId);
+	  const issueByResult = new Map();
+	  issueLinks.forEach(link => {
+	    if (!issueByResult.has(link.result_id)) {
+	      issueByResult.set(link.result_id, link);
+	    }
+	  });
+	  
+	  for (const result of results) {
     if (result.case_detail) {
       try {
         result.case_detail = JSON.parse(result.case_detail);
       } catch (e) {
         result.case_detail = null;
       }
-    }
-    result.steps = db.prepare('SELECT * FROM test_steps WHERE result_id = ? ORDER BY step_index').all(result.id);
-  }
+	    }
+	    result.steps = db.prepare('SELECT * FROM test_steps WHERE result_id = ? ORDER BY step_index').all(result.id);
+	    result.gitlab_issue = issueByResult.get(result.id) || null;
+	  }
   
   report.results = results;
   return report;
@@ -265,12 +298,13 @@ function getReportDetail(reportId) {
 function deleteReport(id) {
   const db = getDb();
   
-  // 删除关联的步骤和结果
-  const results = db.prepare('SELECT id FROM test_results WHERE report_id = ?').all(id);
-  for (const r of results) {
-    db.prepare('DELETE FROM test_steps WHERE result_id = ?').run(r.id);
-  }
-  db.prepare('DELETE FROM test_results WHERE report_id = ?').run(id);
+	// 删除关联的步骤和结果
+	const results = db.prepare('SELECT id FROM test_results WHERE report_id = ?').all(id);
+	for (const r of results) {
+	  db.prepare('DELETE FROM test_steps WHERE result_id = ?').run(r.id);
+	}
+	db.prepare('DELETE FROM gitlab_issue_links WHERE report_id = ?').run(id);
+	db.prepare('DELETE FROM test_results WHERE report_id = ?').run(id);
   db.prepare('DELETE FROM test_reports WHERE id = ?').run(id);
   
   // 删除截图文件
@@ -293,6 +327,63 @@ function getReportDir(reportId) {
   return dir;
 }
 
+function getTestResult(reportId, resultId) {
+  const db = getDb();
+  const result = db.prepare('SELECT * FROM test_results WHERE report_id = ? AND id = ?').get(reportId, resultId);
+  if (!result) return null;
+  if (result.case_detail) {
+    try {
+      result.case_detail = JSON.parse(result.case_detail);
+    } catch (error) {
+      result.case_detail = null;
+    }
+  }
+  result.steps = db.prepare('SELECT * FROM test_steps WHERE result_id = ? ORDER BY step_index').all(result.id);
+  result.gitlab_issue = getGitLabIssueLinkByResult(result.id);
+  return result;
+}
+
+function addGitLabIssueLink(data) {
+  const db = getDb();
+  const result = db.prepare(`
+    INSERT INTO gitlab_issue_links (
+      report_id,
+      result_id,
+      case_id,
+      issue_iid,
+      issue_id,
+      issue_url,
+      issue_title,
+      fingerprint,
+      raw_response,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(
+    data.reportId,
+    data.resultId,
+    data.caseId || null,
+    data.issueIid || null,
+    data.issueId || null,
+    data.issueUrl,
+    data.issueTitle || null,
+    data.fingerprint || null,
+    data.rawResponse ? JSON.stringify(data.rawResponse) : null
+  );
+  return db.prepare('SELECT * FROM gitlab_issue_links WHERE id = ?').get(result.lastInsertRowid);
+}
+
+function getGitLabIssueLinkByResult(resultId) {
+  const db = getDb();
+  return db.prepare(`
+    SELECT *
+    FROM gitlab_issue_links
+    WHERE result_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(resultId) || null;
+}
+
 module.exports = {
   createReport,
   updateReport,
@@ -302,8 +393,11 @@ module.exports = {
   updateTestResult,
   addTestStep,
   updateTestStep,
-  getReportDetail,
-  deleteReport,
-  getReportDir,
-  REPORTS_DIR,
-};
+	  getReportDetail,
+	  deleteReport,
+	  getReportDir,
+	  getTestResult,
+	  addGitLabIssueLink,
+	  getGitLabIssueLinkByResult,
+	  REPORTS_DIR,
+	};

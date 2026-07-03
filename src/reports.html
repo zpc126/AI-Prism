@@ -17,6 +17,9 @@
     .status-fail { color: #ef4444; }
     .screenshot { max-width: 100%; border-radius: 8px; border: 1px solid #e5e7eb; cursor: pointer; }
     .screenshot:hover { transform: scale(1.02); transition: transform 0.2s; }
+    .failure-video { margin: 12px 0 12px 32px; padding: 12px; border: 1px solid #fee2e2; border-radius: 12px; background: #fff7f7; }
+    .failure-video-title { margin-bottom: 8px; color: #991b1b; font-size: 13px; font-weight: 600; }
+    .failure-video video { display: block; width: 100%; max-height: 520px; border-radius: 10px; background: #111827; }
     .case-detail { margin: 0 0 12px 32px; padding: 12px 14px; border: 1px solid #f3f4f6; border-radius: 10px; background: #fafafa; }
     .case-detail summary { cursor: pointer; font-size: 13px; font-weight: 500; color: #52525b; user-select: none; }
     .case-detail-body { display: grid; gap: 10px; margin-top: 12px; }
@@ -25,17 +28,37 @@
     .case-field-value, .case-steps { color: #3f3f46; }
     .case-steps { margin-left: 18px; }
     .case-steps li + li { margin-top: 4px; }
-    .lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 1000; align-items: center; justify-content: center; }
-    .lightbox.active { display: flex; }
-    .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
-  </style>
+	    .lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 1000; align-items: center; justify-content: center; }
+	    .lightbox.active { display: flex; }
+	    .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
+	    .modal-backdrop { display: none; position: fixed; inset: 0; z-index: 2000; background: rgba(15, 23, 42, 0.42); backdrop-filter: blur(6px); align-items: center; justify-content: center; padding: 24px; }
+	    .modal-backdrop.active { display: flex; }
+	    .modal-panel { width: min(720px, 100%); max-height: 86vh; overflow: auto; background: #fff; border-radius: 18px; border: 1px solid #e5e7eb; box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22); }
+	    .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid #f1f5f9; }
+	    .modal-body { padding: 20px; }
+	    .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid #f1f5f9; }
+	    .field-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: #52525b; }
+	    .field-input { width: 100%; border: 1px solid #e4e4e7; border-radius: 10px; padding: 10px 12px; font-size: 14px; outline: none; background: #fff; }
+	    .field-input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
+	    .primary-btn { border: 0; border-radius: 10px; background: #18181b; color: #fff; padding: 9px 14px; font-size: 13px; cursor: pointer; }
+	    .secondary-btn { border: 1px solid #e4e4e7; border-radius: 10px; background: #fff; color: #3f3f46; padding: 9px 14px; font-size: 13px; cursor: pointer; }
+	    .primary-btn:disabled, .secondary-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+	    .toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%) translateY(-10px); z-index: 3000; opacity: 0; pointer-events: none; transition: all 0.2s; background: #18181b; color: #fff; border-radius: 999px; padding: 10px 16px; font-size: 13px; box-shadow: 0 12px 40px rgba(15, 23, 42, 0.24); }
+	    .toast.active { opacity: 1; transform: translateX(-50%) translateY(0); }
+	  </style>
 </head>
 <body>
   <div class="container">
-    <header class="mb-8">
-      <h1 class="text-2xl font-semibold text-zinc-800">测试报告</h1>
-      <p id="report-time" class="text-sm text-zinc-400 mt-1"></p>
-    </header>
+	    <header class="mb-8 flex items-start justify-between gap-4">
+	      <div>
+	        <h1 class="text-2xl font-semibold text-zinc-800">测试报告</h1>
+	        <p id="report-time" class="text-sm text-zinc-400 mt-1"></p>
+	      </div>
+	      <div class="flex items-center gap-2">
+	        <button id="btn-copy-report-link" class="secondary-btn hidden" onclick="copyReportLink()">复制报告链接</button>
+	        <button id="btn-submit-all-issues" class="secondary-btn hidden" onclick="submitAllGitLabIssues()">一键提交 Issue</button>
+	      </div>
+	    </header>
 
     <!-- 统计卡片 -->
     <div class="grid grid-cols-4 gap-4 mb-8" id="stats-grid">
@@ -69,12 +92,47 @@
     <div id="reports-list"></div>
   </div>
 
-  <div class="lightbox" id="lightbox" onclick="this.classList.remove('active')">
-    <img id="lightbox-img" src="" alt="截图预览">
-  </div>
+	  <div class="lightbox" id="lightbox" onclick="this.classList.remove('active')">
+	    <img id="lightbox-img" src="" alt="截图预览">
+	  </div>
+
+		  <div class="modal-backdrop" id="bug-draft-modal">
+		    <div class="modal-panel">
+		      <div class="modal-head">
+		        <div>
+		          <h3 class="font-semibold text-zinc-900" id="bug-draft-title">提交 GitLab Issue</h3>
+		          <p class="text-xs text-zinc-400 mt-1" id="bug-draft-subtitle">提交前可以人工调整标题、描述、标签</p>
+		        </div>
+		        <button class="secondary-btn" onclick="closeModal('bug-draft-modal')">关闭</button>
+		      </div>
+		      <div class="modal-body grid gap-4">
+	        <label>
+	          <span class="field-label">标题</span>
+	          <input class="field-input" id="bug-title">
+	        </label>
+	        <label>
+	          <span class="field-label">标签</span>
+	          <input class="field-input" id="bug-labels">
+	        </label>
+	        <label>
+	          <span class="field-label">描述</span>
+	          <textarea class="field-input" id="bug-description" rows="18"></textarea>
+	        </label>
+	      </div>
+		      <div class="modal-foot">
+		        <button class="secondary-btn" onclick="closeModal('bug-draft-modal')">取消</button>
+		        <button class="primary-btn" id="submit-bug-btn" onclick="submitGitLabIssue()">提交 Issue</button>
+		      </div>
+		    </div>
+		  </div>
+
+	  <div class="toast" id="toast"></div>
 
   <script>
-    const API_BASE = '/api';
+		    const API_BASE = '/api';
+		    let currentReportId = null;
+		    let currentReport = null;
+		    let activeBugDraft = null;
 
     // 从 URL 获取报告 ID
     const urlParams = new URLSearchParams(window.location.search);
@@ -120,13 +178,15 @@
     }
 
     // 加载单个报告
-    async function loadReport(id) {
+	    async function loadReport(id) {
       try {
         const response = await fetch(`${API_BASE}/reports/${id}`);
         const data = await response.json();
 
         if (data.success) {
-          renderReport(data.report);
+		          currentReportId = id;
+		          currentReport = data.report;
+		          renderReport(data.report);
         }
       } catch (error) {
         console.error('加载报告失败:', error);
@@ -189,13 +249,26 @@
       document.getElementById('stat-rate').textContent = rate + '%';
       document.getElementById('rate-bar').style.width = rate + '%';
 
-      // 时间
-      document.getElementById('report-time').textContent =
-        `${formatDate(report.started_at)} · 耗时 ${formatDuration(report.duration_ms)}`;
+	      // 时间
+	      document.getElementById('report-time').textContent =
+	        `${formatDate(report.started_at)} · 耗时 ${formatDuration(report.duration_ms)}`;
+	      document.getElementById('btn-copy-report-link')?.classList.toggle('hidden', !report.id);
+	      document.getElementById('btn-submit-all-issues')?.classList.toggle('hidden', !(report.results || []).length);
 
-      // 结果列表
-      const resultsHtml = (report.results || []).map(result => {
-        const stepsHtml = (result.steps || []).map(step => `
+	      // 结果列表
+		      const resultsHtml = (report.results || []).map(result => {
+		        const failureVideoHtml = result.status === 'failed' && result.video_path
+	          ? `<div class="failure-video">
+	              <div class="failure-video-title">失败过程回放</div>
+	              <video controls preload="metadata" src="${API_BASE}/reports/${report.id}/videos/${getFilename(result.video_path)}"></video>
+	            </div>`
+		          : '';
+		        const issueLabel = result.status === 'failed' ? '提交 Bug' : '提交 Issue';
+		        const existingIssueHtml = result.gitlab_issue?.issue_url
+		          ? `<a class="secondary-btn" href="${escapeAttr(result.gitlab_issue.issue_url)}" target="_blank" rel="noreferrer">查看 Issue #${escapeHtml(result.gitlab_issue.issue_iid || '')}</a>`
+		          : '';
+		        const bugActionHtml = `${existingIssueHtml}<button type="button" class="primary-btn" data-action="open-bug-draft" data-report-id="${escapeAttr(report.id)}" data-result-id="${Number(result.id)}">${issueLabel}</button>`;
+		        const stepsHtml = (result.steps || []).map(step => `
           <div class="flex items-start gap-3 py-3 border-t border-zinc-50">
             <div class="text-sm mt-0.5">${step.status === 'passed' ? '<span class="status-pass">✓</span>' : '<span class="status-fail">✗</span>'}</div>
             <div class="flex-1">
@@ -218,22 +291,182 @@
                   ${result.priority ? `<span class="text-xs px-2 py-0.5 bg-zinc-100 rounded">${escapeHtml(result.priority)}</span>` : ''}
                 </div>
               </div>
-              <div class="ml-auto text-sm text-zinc-400">${formatDuration(result.duration_ms)}</div>
-            </div>
-            ${renderCaseDetail(result)}
-            ${stepsHtml}
-          </div>
+	              <div class="ml-auto flex items-center gap-2">
+	                ${bugActionHtml}
+	                <span class="text-sm text-zinc-400">${formatDuration(result.duration_ms)}</span>
+	              </div>
+		            </div>
+	            ${renderCaseDetail(result)}
+	            ${failureVideoHtml}
+	            ${stepsHtml}
+	          </div>
         `;
       }).join('');
 
       document.getElementById('results-list').innerHTML = resultsHtml || '<p class="text-zinc-400 text-center py-8">暂无执行结果</p>';
-    }
+	    }
 
-    // 工具函数
-    function escapeHtml(text) {
-      if (!text) return '';
-      return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
+			    async function openBugDraft(reportId, resultId) {
+		      try {
+		        const response = await fetch(`${API_BASE}/gitlab/reports/${encodeURIComponent(reportId)}/results/${resultId}/draft`, {
+		          method: 'POST',
+		        });
+		        const data = await response.json();
+		        if (!data.success) throw new Error(data.error || '生成 Bug 草稿失败');
+		        activeBugDraft = { reportId, resultId, draft: data.draft };
+		        document.getElementById('bug-draft-title').textContent = '提交 GitLab Issue';
+		        document.getElementById('bug-draft-subtitle').textContent = '提交前可以人工调整标题、描述、标签';
+		        document.getElementById('submit-bug-btn').textContent = '提交 Issue';
+		        document.getElementById('bug-title').value = data.draft.title || '';
+		        document.getElementById('bug-labels').value = data.draft.labels || '';
+		        document.getElementById('bug-description').value = data.draft.description || '';
+		        openModal('bug-draft-modal');
+	      } catch (error) {
+		        showToast(error.message || '生成 Bug 草稿失败');
+		      }
+		    }
+
+		    async function submitAllGitLabIssues() {
+		      if (!currentReportId || !currentReport) return;
+		      const button = document.getElementById('btn-submit-all-issues');
+			      const total = (currentReport.results || []).filter(result => result.status === 'failed').length;
+				      if (!total) {
+				        showToast('当前报告没有失败用例可提交');
+				        return;
+				      }
+
+		      button.disabled = true;
+		      button.textContent = `提交中 0/${total}`;
+		      try {
+		        const response = await fetch(`${API_BASE}/gitlab/reports/${encodeURIComponent(currentReportId)}/issues`, {
+		          method: 'POST',
+		          headers: { 'Content-Type': 'application/json' },
+		          body: JSON.stringify({}),
+		        });
+		        const data = await response.json();
+		        if (!data.success && !data.summary) throw new Error(data.error || '一键提交失败');
+		        const summary = data.summary || {};
+				        showToast(`失败用例已创建 ${summary.created || 0} 个，提交失败 ${summary.failed || 0} 个`);
+		        loadReport(currentReportId);
+		      } catch (error) {
+		        showToast(error.message || '一键提交 Issue 失败');
+		      } finally {
+		        button.disabled = false;
+		        button.textContent = '一键提交 Issue';
+		      }
+		    }
+
+		    async function getShareReportUrl() {
+		      const id = currentReportId || reportId;
+		      if (!id) return window.location.href;
+		      try {
+		        const response = await fetch(`${API_BASE}/gitlab/reports/${encodeURIComponent(id)}/link`);
+		        const data = await response.json();
+		        if (data.success && data.url) return data.url;
+		      } catch (error) {
+		        console.warn('获取报告链接失败，使用当前地址:', error);
+		      }
+		      const url = new URL('/reports.html', window.location.origin);
+		      url.searchParams.set('id', id);
+		      return url.href;
+		    }
+
+		    async function copyReportLink() {
+		      const url = await getShareReportUrl();
+		      try {
+		        await navigator.clipboard.writeText(url);
+		      } catch (error) {
+		        const input = document.createElement('textarea');
+		        input.value = url;
+		        input.style.position = 'fixed';
+		        input.style.opacity = '0';
+		        document.body.appendChild(input);
+		        input.select();
+		        document.execCommand('copy');
+		        input.remove();
+		      }
+		      showToast('报告链接已复制');
+		    }
+
+	    async function submitGitLabIssue() {
+	      if (!activeBugDraft) return;
+	      const button = document.getElementById('submit-bug-btn');
+	      button.disabled = true;
+	      button.textContent = '提交中...';
+	      try {
+	        const payload = {
+	          ...activeBugDraft.draft,
+	          title: document.getElementById('bug-title').value.trim(),
+	          labels: document.getElementById('bug-labels').value.trim(),
+			          description: document.getElementById('bug-description').value,
+			        };
+	        const response = await fetch(`${API_BASE}/gitlab/reports/${encodeURIComponent(activeBugDraft.reportId)}/results/${activeBugDraft.resultId}/issue`, {
+	          method: 'POST',
+	          headers: { 'Content-Type': 'application/json' },
+	          body: JSON.stringify(payload),
+	        });
+	        const data = await response.json();
+	        if (!data.success) throw new Error(data.error || '提交失败');
+	        closeModal('bug-draft-modal');
+	        showToast('GitLab Issue 已创建');
+	        if (currentReportId) loadReport(currentReportId);
+	        if (data.issue?.web_url) window.open(data.issue.web_url, '_blank', 'noreferrer');
+	      } catch (error) {
+	        showToast(error.message || '提交 GitLab Issue 失败');
+	      } finally {
+	        button.disabled = false;
+	        button.textContent = '提交 Issue';
+	      }
+	    }
+
+	    function openModal(id) {
+	      document.getElementById(id).classList.add('active');
+	    }
+
+		    function closeModal(id) {
+		      document.getElementById(id).classList.remove('active');
+		    }
+
+		    document.addEventListener('click', async (event) => {
+		      const button = event.target.closest('[data-action="open-bug-draft"]');
+		      if (!button) return;
+		      event.preventDefault();
+		      event.stopPropagation();
+		      const originalText = button.textContent;
+		      button.disabled = true;
+		      try {
+			        await openBugDraft(
+			          button.dataset.reportId,
+			          Number(button.dataset.resultId)
+			        );
+		      } finally {
+		        button.disabled = false;
+		        button.textContent = originalText;
+		      }
+		    });
+
+		    function showToast(message) {
+	      const toast = document.getElementById('toast');
+	      toast.textContent = message;
+	      toast.classList.add('active');
+	      clearTimeout(showToast.timer);
+	      showToast.timer = setTimeout(() => toast.classList.remove('active'), 2600);
+	    }
+
+	    // 工具函数
+	    function escapeHtml(text) {
+	      if (!text) return '';
+	      return String(text)
+	        .replace(/&/g, '&amp;')
+	        .replace(/</g, '&lt;')
+	        .replace(/>/g, '&gt;')
+	        .replace(/"/g, '&quot;')
+	        .replace(/'/g, '&#39;');
+	    }
+
+	    function escapeAttr(text) {
+	      return escapeHtml(text);
+	    }
 
     function formatDuration(ms) {
       if (!ms) return '-';

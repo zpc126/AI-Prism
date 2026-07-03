@@ -37,6 +37,53 @@ function loadQASkill() {
   return null;
 }
 
+function stripKnownEndpointSuffix(url, suffixes) {
+  const value = String(url || '').trim().replace(/\/+$/, '');
+  for (const suffix of suffixes) {
+    const pattern = new RegExp(`${suffix.replace(/\//g, '\\/')}$`, 'i');
+    if (pattern.test(value)) {
+      return value.replace(pattern, '').replace(/\/+$/, '');
+    }
+  }
+  return value;
+}
+
+function normalizePiOpenAIBaseUrl(config) {
+  const source = String(config.requestUrl || config.baseUrl || '').trim();
+  return stripKnownEndpointSuffix(source, ['/chat/completions']);
+}
+
+function normalizePiAnthropicBaseUrl(config) {
+  const source = String(config.requestUrl || config.baseUrl || 'https://api.anthropic.com').trim();
+  return stripKnownEndpointSuffix(source, ['/v1/messages', '/messages']);
+}
+
+function normalizePiAzureBaseUrl(config) {
+  return String(config.endpoint || config.baseUrl || '').trim().replace(/\/+$/, '');
+}
+
+function getConfiguredProviderApi(config) {
+  if (config.provider === 'anthropic') return 'anthropic-messages';
+  if (config.provider === 'azure') return 'azure-openai-responses';
+  return 'openai-completions';
+}
+
+function getConfiguredProviderBaseUrl(config) {
+  if (config.provider === 'anthropic') return normalizePiAnthropicBaseUrl(config);
+  if (config.provider === 'azure') return normalizePiAzureBaseUrl(config);
+  return normalizePiOpenAIBaseUrl(config);
+}
+
+function getConfiguredProviderHeaders(config) {
+  const baseUrl = String(config.baseUrl || config.requestUrl || '').toLowerCase();
+  if (baseUrl.includes('mimo') || baseUrl.includes('xiaomi')) {
+    return {
+      'api-key': config.apiKey
+    };
+  }
+  return undefined;
+}
+
 class PIAgent {
   constructor(options = {}) {
     this.session = null;
@@ -154,34 +201,31 @@ class PIAgent {
     if (!config?.apiKey) {
       throw new Error('智能模式未读取到 API Key，请先在设置中保存模型配置');
     }
-    if (!config?.model) {
+    const modelId = config.deploymentName || config.model;
+    if (!modelId) {
       throw new Error('智能模式未读取到模型名称，请先在设置中填写模型');
     }
 
-    if (config.provider === 'anthropic') {
-      authStorage.setRuntimeApiKey('anthropic', config.apiKey);
-      const anthropicModel = modelRegistry.find('anthropic', config.model);
-      if (!anthropicModel) {
-        throw new Error(`智能模式不支持当前 Anthropic 模型：${config.model}`);
-      }
-      return anthropicModel;
-    }
-
-    const baseUrl = (config.baseUrl || '').replace(/\/+$/, '');
+    const baseUrl = getConfiguredProviderBaseUrl(config);
     if (!baseUrl) {
       throw new Error('智能模式未读取到 Base URL，请先在设置中填写接口地址');
     }
 
     const providerId = 'prism-configured';
+    const api = getConfiguredProviderApi(config);
+    const headers = getConfiguredProviderHeaders(config);
     modelRegistry.registerProvider(providerId, {
       name: `Prism ${config.provider || 'Custom'}`,
       baseUrl,
       apiKey: config.apiKey,
-      api: 'openai-completions',
-      authHeader: true,
+      api,
+      ...(headers ? { headers } : {}),
+      authHeader: !headers && api === 'openai-completions',
       models: [{
-        id: config.model,
-        name: config.model,
+        id: modelId,
+        name: config.name || modelId,
+        api,
+        baseUrl,
         reasoning: false,
         input: ['text', 'image'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -195,9 +239,9 @@ class PIAgent {
     });
     authStorage.setRuntimeApiKey(providerId, config.apiKey);
 
-    const configuredModel = modelRegistry.find(providerId, config.model);
+    const configuredModel = modelRegistry.find(providerId, modelId);
     if (!configuredModel) {
-      throw new Error(`智能模式无法注册模型：${config.model}`);
+      throw new Error(`智能模式无法注册模型：${modelId}`);
     }
     return configuredModel;
   }

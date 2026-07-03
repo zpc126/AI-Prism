@@ -267,6 +267,18 @@ async function screenshot(label = 'screenshot') {
   };
 }
 
+async function captureFrame() {
+  if (activeDevice === 'mobile') {
+    const captured = await adbDevice.screenshot('video_frame');
+    if (captured?.filepath && fs.existsSync(captured.filepath)) {
+      return fs.readFileSync(captured.filepath);
+    }
+    return null;
+  }
+  const { page } = await launchBrowser();
+  return await page.screenshot({ type: 'png', fullPage: false });
+}
+
 // 获取页面快照（DOM 结构摘要）
 async function getSnapshot() {
   if (activeDevice === 'mobile') return adbDevice.getSnapshot();
@@ -505,6 +517,7 @@ module.exports = {
   click,
   fill,
   screenshot,
+  captureFrame,
   getSnapshot,
   waitForElement,
   scroll,

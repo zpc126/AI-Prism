@@ -7,6 +7,18 @@ const path = require('path');
 
 const defaultConfig = {
   provider: 'openai',
+  activeModelId: 'model-openai-default',
+  models: [
+    {
+      id: 'model-openai-default',
+      name: 'OpenAI GPT-4',
+      provider: 'openai',
+      apiKey: '',
+      baseUrl: 'https://api.openai.com/v1',
+      requestUrl: '',
+      model: 'gpt-4'
+    }
+  ],
   providers: {
     openai: {
       name: 'OpenAI',
@@ -47,6 +59,100 @@ function mergeConfig(defaultObj, userObj) {
   return result;
 }
 
+function createModelId(provider = 'custom') {
+  return `model-${provider}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function providerToModel(provider, config = {}) {
+  const name = config.name || {
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    azure: 'Azure OpenAI',
+    custom: '自定义模型'
+  }[provider] || '自定义模型';
+
+  return {
+    id: config.id || createModelId(provider),
+    name,
+    provider,
+    apiKey: config.apiKey || '',
+    baseUrl: config.baseUrl || config.endpoint || '',
+    requestUrl: config.requestUrl || '',
+    endpoint: config.endpoint || '',
+    deploymentName: config.deploymentName || '',
+    model: config.model || config.deploymentName || ''
+  };
+}
+
+function normalizeModels(config) {
+  const models = Array.isArray(config.models)
+    ? config.models
+      .filter(Boolean)
+      .map((model, index) => ({
+        id: model.id || createModelId(model.provider || config.provider || `custom-${index}`),
+        name: model.name || model.label || model.model || model.provider || `模型 ${index + 1}`,
+        provider: model.provider || config.provider || 'custom',
+        apiKey: model.apiKey || '',
+        baseUrl: model.baseUrl || model.endpoint || '',
+        requestUrl: model.requestUrl || '',
+        endpoint: model.endpoint || '',
+        deploymentName: model.deploymentName || '',
+        model: model.model || model.deploymentName || '',
+        createdAt: model.createdAt,
+        updatedAt: model.updatedAt
+      }))
+    : [];
+
+  if (models.length === 0 && config.providers) {
+    Object.entries(config.providers).forEach(([provider, providerConfig]) => {
+      if (providerConfig && (providerConfig.apiKey || providerConfig.baseUrl || providerConfig.endpoint || provider === config.provider)) {
+        models.push(providerToModel(provider, providerConfig));
+      }
+    });
+  }
+
+  if (models.length === 0) {
+    models.push({ ...defaultConfig.models[0] });
+  }
+
+  let activeModelId = config.activeModelId;
+  if (!activeModelId && config.provider) {
+    const matched = models.find(model => model.provider === config.provider);
+    activeModelId = matched?.id;
+  }
+  if (!activeModelId || !models.some(model => model.id === activeModelId)) {
+    activeModelId = models[0]?.id || '';
+  }
+
+  return { models, activeModelId };
+}
+
+function normalizeConfig(config = {}) {
+  const merged = mergeConfig(defaultConfig, config || {});
+  const modelSource = Array.isArray(config.models) && config.models.length > 0
+    ? merged
+    : { ...config, provider: config.provider, providers: config.providers };
+  const normalized = normalizeModels(modelSource);
+  merged.models = normalized.models;
+  merged.activeModelId = normalized.activeModelId;
+  const activeModel = merged.models.find(model => model.id === merged.activeModelId) || merged.models[0];
+  if (activeModel) {
+    merged.provider = activeModel.provider || merged.provider || 'custom';
+    merged.providers = merged.providers || {};
+    merged.providers[activeModel.provider] = {
+      ...(merged.providers[activeModel.provider] || {}),
+      name: activeModel.name,
+      apiKey: activeModel.apiKey || '',
+      baseUrl: activeModel.baseUrl || '',
+      requestUrl: activeModel.requestUrl || '',
+      endpoint: activeModel.endpoint || activeModel.baseUrl || '',
+      deploymentName: activeModel.deploymentName || '',
+      model: activeModel.model || ''
+    };
+  }
+  return merged;
+}
+
 function getWebConfigPath() {
   return process.env.SCOUT_CONFIG_PATH
     ? path.resolve(process.env.SCOUT_CONFIG_PATH)
@@ -71,7 +177,7 @@ function loadWebConfig() {
 function saveWebConfig(config) {
   const configPath = getWebConfigPath();
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  const merged = mergeConfig(defaultConfig, config || {});
+  const merged = normalizeConfig(config || {});
   fs.writeFileSync(configPath, JSON.stringify(merged, null, 2), {
     encoding: 'utf-8',
     mode: 0o600
@@ -80,12 +186,26 @@ function saveWebConfig(config) {
 }
 
 function loadConfig() {
-  return mergeConfig(defaultConfig, loadWebConfig() || {});
+  return normalizeConfig(loadWebConfig() || {});
 }
 
 // 获取当前激活的 LLM 配置
 function getLLMConfig() {
-  const savedConfig = loadWebConfig();
+  const savedConfig = loadConfig();
+  const activeModel = savedConfig.models?.find(model => model.id === savedConfig.activeModelId);
+  if (activeModel?.apiKey) {
+    return {
+      provider: activeModel.provider || 'custom',
+      apiKey: activeModel.apiKey,
+      baseUrl: activeModel.baseUrl || activeModel.endpoint,
+      requestUrl: activeModel.requestUrl,
+      endpoint: activeModel.endpoint,
+      model: activeModel.model || activeModel.deploymentName,
+      deploymentName: activeModel.deploymentName,
+      name: activeModel.name,
+      id: activeModel.id
+    };
+  }
   
   if (savedConfig && savedConfig.provider) {
     const provider = savedConfig.provider;
