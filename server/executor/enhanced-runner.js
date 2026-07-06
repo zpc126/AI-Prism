@@ -305,6 +305,8 @@ class EnhancedRunner {
       const urlMatch = text.match(/(https?:\/\/[^\s]+)/);
       if (urlMatch) {
         await this.page.goto(urlMatch[1], { waitUntil: 'domcontentloaded', timeout: 30000 });
+      } else if (/打开.*(Web\s*测试入口|测试入口|后台|系统入口|入口)/i.test(text)) {
+        throw new Error('未配置该项目的 Web 测试入口，请先在执行配置里配置项目入口');
       } else {
         const siteName = text.replace(/^(打开|访问|goto|navigate|去|进|上)\s*/, '').trim();
         const url = this.guessUrl(siteName);

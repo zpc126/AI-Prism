@@ -13,19 +13,22 @@ const browserSessions = {
   mobile: { browser: null, context: null, page: null },
 };
 let activeDevice = 'web';
-const browserProfileDir = path.join(__dirname, '../../data/browser-profile');
+const dataDir = path.join(__dirname, '../../data');
+const browserRuntimeRoot = path.join(dataDir, 'browser-runtime');
+const browserProfileDir = path.join(browserRuntimeRoot, String(process.pid));
+const profileOverrides = {};
 let activeVideoSession = null;
 
 const DEVICE_CONFIGS = {
   web: {
     label: 'Web',
-    profileDir: browserProfileDir,
+    profileDir: path.join(browserProfileDir, 'web'),
     viewport: { width: 1280, height: 800 },
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   },
   mobile: {
     label: '手机',
-    profileDir: `${browserProfileDir}-mobile`,
+    profileDir: path.join(browserProfileDir, 'mobile'),
     viewport: { width: 390, height: 844 },
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
     deviceScaleFactor: 3,
@@ -65,6 +68,38 @@ function safeVideoName(value) {
     .slice(0, 80);
 }
 
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function flexibleTextRegExp(value) {
+  const normalized = String(value || '').replace(/\s+/g, '');
+  if (!normalized) return /.+/;
+  return new RegExp([...normalized].map(char => escapeRegExp(char)).join('\\s*'), 'i');
+}
+
+function getProfileDir(device) {
+  return profileOverrides[device] || DEVICE_CONFIGS[device].profileDir;
+}
+
+function shouldRetryWithFreshProfile(error) {
+  return /(正在现有的浏览器会话中打开|existing browser session|Target page, context or browser has been closed|ProcessSingleton|SingletonLock|profile appears to be in use)/i
+    .test(String(error?.message || error || ''));
+}
+
+async function launchPersistentContext(profileDir, contextOptions, device) {
+  try {
+    return await chromium.launchPersistentContext(profileDir, contextOptions);
+  } catch (error) {
+    if (!shouldRetryWithFreshProfile(error)) throw error;
+    const freshProfileDir = path.join(browserRuntimeRoot, `${process.pid}-${device}-${Date.now()}`);
+    profileOverrides[device] = freshProfileDir;
+    fs.mkdirSync(freshProfileDir, { recursive: true });
+    console.warn(`[browser] 当前 Chrome profile 被占用，已切换到新的运行 profile: ${freshProfileDir}`);
+    return await chromium.launchPersistentContext(freshProfileDir, contextOptions);
+  }
+}
+
 // 启动浏览器
 async function launchBrowser(device = activeDevice) {
   const normalizedDevice = device === 'mobile' ? 'mobile' : 'web';
@@ -80,7 +115,8 @@ async function launchBrowser(device = activeDevice) {
     }
     resetBrowserState(normalizedDevice);
     
-    fs.mkdirSync(config.profileDir, { recursive: true });
+    const profileDir = getProfileDir(normalizedDevice);
+    fs.mkdirSync(profileDir, { recursive: true });
     const contextOptions = {
       headless: false,
       channel: 'chrome',
@@ -101,7 +137,7 @@ async function launchBrowser(device = activeDevice) {
         '--no-default-browser-check',
       ],
     };
-    const context = await chromium.launchPersistentContext(config.profileDir, contextOptions);
+    const context = await launchPersistentContext(profileDir, contextOptions, normalizedDevice);
 
     const browser = context.browser();
     const page = context.pages().find(candidate => !candidate.isClosed()) || await context.newPage();
@@ -237,10 +273,30 @@ async function navigate(url) {
 async function click(target) {
   if (activeDevice === 'mobile') return adbDevice.click(target);
   const { page, device, deviceLabel } = await launchBrowser();
+  const targetNormalized = String(target || '').replace(/\s+/g, '');
+  const targetRegex = flexibleTextRegExp(target);
+  const clickByNormalizedText = async selector => {
+    const locator = page.locator(selector);
+    const count = Math.min(await locator.count(), 40);
+    for (let index = 0; index < count; index++) {
+      const item = locator.nth(index);
+      const text = await item.evaluate(el => {
+        const value = el.value || el.innerText || el.textContent || el.getAttribute('aria-label') || '';
+        return String(value).replace(/\s+/g, '');
+      }).catch(() => '');
+      if (text && text.includes(targetNormalized)) {
+        await item.click({ timeout: 3000 });
+        return;
+      }
+    }
+    throw new Error(`找不到元素: ${target}`);
+  };
   
   const selectors = [
-    () => page.getByRole('button', { name: new RegExp(target, 'i') }).first().click({ timeout: 3000 }),
-    () => page.getByRole('link', { name: new RegExp(target, 'i') }).first().click({ timeout: 3000 }),
+    () => clickByNormalizedText('button, [role="button"], input[type="submit"], input[type="button"]'),
+    () => page.getByRole('button', { name: targetRegex }).first().click({ timeout: 3000 }),
+    () => page.getByRole('link', { name: targetRegex }).first().click({ timeout: 3000 }),
+    () => clickByNormalizedText('a[href]'),
     () => page.getByText(target, { exact: false }).first().click({ timeout: 3000 }),
     () => page.locator(`button:has-text("${target}")`).first().click({ timeout: 3000 }),
     () => page.locator(`a:has-text("${target}")`).first().click({ timeout: 3000 }),
@@ -270,11 +326,19 @@ async function click(target) {
 async function fill(target, value) {
   if (activeDevice === 'mobile') return adbDevice.fill(target, value);
   const { page, device, deviceLabel } = await launchBrowser();
+  const targetText = String(target || '');
+  const wantsPassword = /(密码|password|pwd)/i.test(targetText);
+  const wantsAccount = /(账号|账户|用户名|用户|手机号|手机|account|user|login)/i.test(targetText);
   
   const selectors = [
     () => page.getByRole('textbox', { name: new RegExp(target || 'input', 'i') }).first(),
+    () => page.getByLabel(new RegExp(target || 'input', 'i')).first(),
     () => page.getByPlaceholder(new RegExp(target || 'input', 'i')).first(),
+    ...(wantsPassword ? [() => page.locator('input[type="password"]:visible').first()] : []),
+    ...(wantsAccount ? [() => page.locator('input:not([type]):visible, input[type="text"]:visible, input[type="tel"]:visible, input[type="email"]:visible').first()] : []),
     () => page.locator('input[type="text"]:visible').first(),
+    () => page.locator('input[type="password"]:visible').first(),
+    () => page.locator('input:visible').first(),
     () => page.locator('textarea:visible').first(),
     () => page.locator('[contenteditable="true"]').first(),
   ];
@@ -340,7 +404,13 @@ async function captureFrame() {
     }
     return null;
   }
-  const { page } = await launchBrowser();
+  const session = browserSessions[activeDevice] || browserSessions.web;
+  if (!session?.context) return null;
+  if (!session.page || session.page.isClosed()) {
+    session.page = session.context.pages().find(candidate => !candidate.isClosed()) || null;
+  }
+  if (!session.page || session.page.isClosed()) return null;
+  const page = session.page;
   return await page.screenshot({ type: 'png', fullPage: false });
 }
 
@@ -407,7 +477,7 @@ async function getSnapshot() {
     
     let node;
     const textSet = new Set();
-    while ((node = walker.nextNode()) && textSet.size < 20) {
+    while ((node = walker.nextNode()) && textSet.size < 200) {
       const text = node.textContent?.trim();
       if (text && text.length > 2 && text.length < 100) {
         textSet.add(text);
@@ -576,6 +646,7 @@ const browserTool = {
 
 module.exports = {
   browserTool,
+  isBrowserAlive,
   launchBrowser,
   closeBrowser,
   navigate,

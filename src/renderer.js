@@ -392,6 +392,88 @@ function applyCaseUpdate(updatedCase, { persist = true } = {}) {
   return true;
 }
 
+function deleteCaseNode(node) {
+  if (!node) return false;
+  const depth = node._depth || 0;
+  const deletedIds = [];
+
+  if (depth === 1) {
+    const name = node.title;
+    const removedCategory = (state.categories || []).find(
+      category => (category.name || category.type) === name
+    );
+    (removedCategory?.cases || []).forEach(item => deletedIds.push(item.id));
+    const before = state.categories.length;
+    state.categories = (state.categories || []).filter(
+      category => (category.name || category.type) !== name
+    );
+    if (state.categories.length === before) return false;
+  } else {
+    const matched = findCaseById(node.id);
+    if (!matched) return false;
+    deletedIds.push(node.id);
+    matched.category.cases = (matched.category.cases || []).filter(
+      item => String(item.id) !== String(node.id)
+    );
+    state.categories = (state.categories || []).filter(
+      category => (category.cases || []).length > 0
+    );
+  }
+
+  deletedIds.forEach(id => {
+    if (state.canvas?.state?.caseStatus) {
+      delete state.canvas.state.caseStatus[id];
+    }
+  });
+  state.canvas?.persistCaseStatus?.();
+  if (depth === 1 && state.selectedCategory === node.title) {
+    state.selectedCategory = null;
+  }
+  state.mindMap = buildMindMap(state.categories);
+  state.canvas?.setMindMap(state.mindMap);
+  renderCanvasModuleNav(state.selectedCategory);
+  addIslandMessage('system', depth === 1 ? '模块已删除并保存' : '用例已删除并保存');
+  persistCurrentSession().catch(error => {
+    console.error('删除用例失败:', error);
+    addIslandMessage('system', `删除未保存：${error.message}`);
+  });
+  return true;
+}
+
+function showDeleteCaseConfirm(node) {
+  if (!node) return;
+  const isModule = (node._depth || 0) === 1;
+  const title = node.title || (isModule ? '当前模块' : '当前用例');
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 z-[99999] flex items-center justify-center bg-black/35 backdrop-blur-sm';
+  modal.innerHTML = `
+    <div class="w-[360px] rounded-2xl bg-white shadow-2xl border border-zinc-100 overflow-hidden">
+      <div class="p-5 border-b border-zinc-100">
+        <div class="text-base font-semibold text-zinc-900">${isModule ? '删除模块' : '删除用例'}</div>
+        <div class="mt-2 text-sm text-zinc-500 leading-6">
+          ${isModule
+            ? `将删除「${escapeHtml(title)}」模块下的全部用例，删除后会立即保存。`
+            : `将删除「${escapeHtml(title)}」这条用例，删除后会立即保存。`}
+        </div>
+      </div>
+      <div class="p-4 flex justify-end gap-2 bg-zinc-50">
+        <button class="delete-node-cancel px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-xl hover:bg-white">取消</button>
+        <button class="delete-node-ok px-4 py-2 text-sm text-white bg-red-500 hover:bg-red-600 rounded-xl">确认删除</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.querySelector('.delete-node-cancel')?.addEventListener('click', close);
+  modal.querySelector('.delete-node-ok')?.addEventListener('click', () => {
+    deleteCaseNode(node);
+    close();
+  });
+  modal.addEventListener('click', event => {
+    if (event.target === modal) close();
+  });
+}
+
 function persistCanvasChatChanges() {
   state.mindMap = buildMindMap(state.categories);
   renderCanvasModuleNav(state.selectedCategory);
@@ -542,6 +624,9 @@ function switchView(viewName) {
     
     state.canvas.onEditCase = (node) => {
       showEditCaseModal(node);
+    };
+    state.canvas.onDeleteCase = (node) => {
+      showDeleteCaseConfirm(node);
     };
   }
   if (viewName === 'engine') renderCanvasModuleNav();
@@ -1740,33 +1825,95 @@ function getAllCases() {
   const cases = [];
   state.categories.forEach(cat => {
     if (cat.cases) {
-      cat.cases.forEach(c => cases.push({
-        ...c,
-        productName: getMindMapRootTitle(),
-        moduleName: cat.name || cat.type || c.category || '',
-        category: cat.name || cat.type || c.category || ''
-      }));
+      cat.cases.forEach(c => {
+        const categoryName = cat.name || cat.type || c.category || '';
+        const hierarchy = inferExecutionHierarchy(c, categoryName);
+        cases.push({
+          ...c,
+          productName: hierarchy.productName,
+          moduleName: hierarchy.moduleName,
+          category: categoryName
+        });
+      });
     }
   });
   return cases;
 }
 
+function inferExecutionHierarchy(caseData = {}, categoryName = '') {
+  const steps = Array.isArray(caseData.steps) ? caseData.steps : [];
+  const stepText = steps.join('\n');
+  const webDirectoryMatch = stepText.match(/在\s*Web\s*目录(?:中)?找到并进入\s*([^\n，。；]+)/i);
+  const nestedEntryMatch = [...stepText.matchAll(/在\s*([^\n，。；]+?)\s*中找到并进入\s*([^\n，。；]+)/g)]
+    .find(match => !/Web\s*目录/i.test(match[1]));
+  const clean = value => String(value || '')
+    .replace(/(页面|模块|菜单|入口)$/g, '')
+    .trim();
+  const rootTitle = getMindMapRootTitle();
+  const isGenericRoot = /^(需求简述|测试用例|未命名需求|需求分析报告)$/i.test(rootTitle)
+    || /需求|文档|报告/.test(rootTitle || '');
+  const rawProductName = clean(caseData.productName);
+  const isGenericProduct = /^(需求简述|测试用例|未命名需求|需求分析报告)$/i.test(rawProductName)
+    || /需求|文档|报告/.test(rawProductName || '');
+  const productName = (!isGenericProduct ? rawProductName : '')
+    || clean(webDirectoryMatch?.[1])
+    || (!isGenericRoot ? clean(rootTitle) : '');
+  const moduleName = clean(caseData.moduleName)
+    || clean(nestedEntryMatch?.[2])
+    || clean(categoryName);
+  return { productName, moduleName };
+}
+
 function executeSingleCase(node) {
-  const testCase = getAllCases().find(item => String(item.id) === String(node.id)) || {
+  if ((node?._depth || 0) === 1) {
+    executeModuleCases(node);
+    return;
+  }
+  const fallbackCase = {
     id: node.id,
     title: node.title,
     priority: node.priority || 'P1',
+    productName: node.productName || '',
+    moduleName: node.moduleName || node.category || '',
+    category: node.category || node.moduleName || '',
     steps: node.children?.filter(child => child.type === 'step').map(child => child.title) || [],
     expected: node.children
       ?.flatMap(child => child.children || [])
       .find(child => child.type === 'expected')?.title || ''
   };
-  let command = `测试用例：${testCase.title}\n`;
-  if (testCase.steps?.length) {
-    command += `步骤：\n${testCase.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}\n`;
+  const matchedCase = getAllCases().find(item => String(item.id) === String(node.id));
+  const testCase = matchedCase || {
+    ...fallbackCase,
+    ...inferExecutionHierarchy(fallbackCase, fallbackCase.category)
+  };
+  runCases([testCase], {
+    title: `${testCase.title || '单条用例'} 测试 ${new Date().toLocaleString('zh-CN')}`,
+    scopeName: testCase.title || '单条用例'
+  });
+}
+
+function getCasesUnderNode(node) {
+  const allCases = getAllCases();
+  if (!node) return [];
+  const childIds = new Set((node.children || []).map(child => String(child.id)));
+  const title = String(node.title || '').trim();
+  return allCases.filter(item =>
+    childIds.has(String(item.id)) ||
+    String(item.category || '') === title ||
+    String(item.moduleName || '') === title
+  );
+}
+
+function executeModuleCases(node) {
+  const cases = getCasesUnderNode(node);
+  if (!cases.length) {
+    addIslandMessage?.('system', `「${node?.title || '该模块'}」下面没有可执行用例`);
+    return;
   }
-  if (testCase.expected) command += `预期结果：${testCase.expected}`;
-  executeAIRun(command, testCase);
+  runCases(cases, {
+    title: `${getMindMapRootTitle()} / ${node.title} 测试 ${new Date().toLocaleString('zh-CN')}`,
+    scopeName: node.title
+  });
 }
 
 // ========== 执行状态灵动岛管理 ==========
@@ -2005,7 +2152,11 @@ function addIslandLog(type, message) {
 }
 
 async function startExecution() {
-  const allCases = getAllCases();
+  return runCases(getAllCases());
+}
+
+async function runCases(selectedCases, runOptions = {}) {
+  const allCases = Array.isArray(selectedCases) ? selectedCases : [];
   const total = allCases.length;
   const hasMobileSteps = allCases.some(testCase =>
     (testCase.steps || []).some(step =>
@@ -2045,7 +2196,7 @@ async function startExecution() {
   
   // 读取执行模式
   const executorMode = document.querySelector('input[name="executor-mode"]:checked');
-  const usePIEngine = executorMode?.value === 'pi-engine';
+  const usePIEngine = executorMode?.value !== 'enhanced';
   
   // 如果用户提供了目标 URL，注入到用例中
   const casesToRun = allCases.map(c => {
@@ -2071,6 +2222,9 @@ async function startExecution() {
   
   // 初始日志
   addIslandLog('info', `共 ${total} 条用例，开始执行...`);
+  if (runOptions.scopeName) {
+    addIslandLog('system', `执行范围: ${runOptions.scopeName}`);
+  }
   if (targetUrl) {
     addIslandLog('system', `测试地址: ${targetUrl}`);
   }
@@ -2086,7 +2240,7 @@ async function startExecution() {
       body: JSON.stringify({
         cases: casesToRun,
         options: { 
-          title: `${getMindMapRootTitle()}测试 ${new Date().toLocaleString('zh-CN')}`,
+          title: runOptions.title || `${getMindMapRootTitle()}测试 ${new Date().toLocaleString('zh-CN')}`,
           productName: getMindMapRootTitle(),
           targetUrl,
           usePIEngine: usePIEngine
@@ -2138,14 +2292,15 @@ async function startExecution() {
             if (currentEvent === 'complete') {
               islandState.isRunning = false;
               islandState.abortController = null;
-              updateIslandStatus('执行完成', `${payload.passed || 0} 通过, ${payload.failed || 0} 失败`);
+              const hasFailed = Number(payload.failed || 0) > 0 || payload.success === false;
+              updateIslandStatus(hasFailed ? '执行失败' : '执行完成', `${payload.passed || 0} 通过, ${payload.failed || 0} 失败`);
               updateIslandProgress(total, total);
               
               if (payload.reportId) {
                 islandState.lastReportId = payload.reportId;
                 const reportButton = $('#btn-exec-view-report');
                 reportButton?.classList.remove('hidden');
-                addIslandLog('success', '测试报告已生成，点击“查看报告”可再次打开');
+                addIslandLog(hasFailed ? 'error' : 'success', '测试报告已生成，点击“查看报告”可再次打开');
                 openExecutionReport(payload.reportId);
               }
             }
@@ -4206,7 +4361,13 @@ async function executeAIRun(command, testCase = null) {
   
   // 移除已有终端面板
   const existing = $('#auto-run-island');
-  if (existing) existing.remove();
+  if (existing) {
+    const isRunning = existing.dataset.running === '1';
+    if (isRunning) {
+      await fetch(`${API_BASE}/stop`, { method: 'POST' }).catch(() => null);
+    }
+    existing.remove();
+  }
   
   // 创建灵动岛
   const island = document.createElement('div');
@@ -4241,6 +4402,7 @@ async function executeAIRun(command, testCase = null) {
     </div>
   `;
   document.body.appendChild(island);
+  island.dataset.running = '1';
   const executionController = new AbortController();
   let stopRequested = false;
   
@@ -4284,6 +4446,7 @@ async function executeAIRun(command, testCase = null) {
   function finishRun(status, text) {
     if (runFinished) return;
     runFinished = true;
+    island.dataset.running = '0';
     spinner.classList.add(`auto-run-spinner-${status}`);
     subtitle.textContent = text;
   }
@@ -5268,10 +5431,15 @@ function buildMindMap(categories) {
       };
       
       cat.cases.forEach(c => {
+        const categoryName = cat.name || cat.type || c.category || '';
+        const hierarchy = inferExecutionHierarchy(c, categoryName);
         const caseNode = {
           id: c.id,
           title: c.title,
           priority: c.priority,
+          productName: hierarchy.productName,
+          moduleName: hierarchy.moduleName,
+          category: categoryName,
           _depth: 2,
           children: []
         };
@@ -5647,6 +5815,9 @@ function loadSession(session) {
       };
       state.canvas.onEditCase = (node) => {
         showEditCaseModal(node);
+      };
+      state.canvas.onDeleteCase = (node) => {
+        showDeleteCaseConfirm(node);
       };
     }
     

@@ -821,6 +821,16 @@ body {
   color: #0284c7;
 }
 
+.action-edit:hover {
+  background: #faf5ff;
+  color: #7c3aed;
+}
+
+.action-delete:hover {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
 /* 步骤节点 */
 .node-step {
   background: #f9fafb;

@@ -564,11 +564,38 @@ function renderGraph() {
 }
 
 // ========== 计算节点位置（业务分组 + 碰撞布局） ==========
+function getKnowledgeType(fragment = {}) {
+  const tags = Array.isArray(fragment.tags) ? fragment.tags : [];
+  const haystack = `${fragment.content || ''}\n${tags.join(' ')}\n${fragment.source || ''}`;
+  if (/knowledgeType:execution|执行配置|项目执行知识|登录配置|入口配置|登录前置|账号密码|execution/i.test(haystack)) {
+    return { key: 'execution', label: '执行配置' };
+  }
+  if (fragment.source === 'test_case_history' || /knowledgeType:case_reference|case_reference|历史用例|历史测试用例|历史学习/i.test(haystack)) {
+    return { key: 'case_reference', label: '历史学习' };
+  }
+  return { key: 'general', label: '其他知识' };
+}
+
 function calculateNodePositions(fragments, width, height) {
-  const genericTags = new Set(['历史用例', '测试用例', 'P0', 'P1', 'P2', 'P3']);
+  const genericTags = new Set([
+    'knowledgeType:execution',
+    'knowledgeType:case_reference',
+    'execution',
+    'case_reference',
+    '执行配置',
+    '项目执行知识',
+    '历史用例',
+    '测试用例',
+    'P0',
+    'P1',
+    'P2',
+    'P3',
+  ]);
   const getClusterKey = (fragment) => {
     const tags = Array.isArray(fragment.tags) ? fragment.tags : [];
-    return tags.find(tag => tag && !genericTags.has(tag)) || '其他';
+    const type = getKnowledgeType(fragment);
+    const businessTag = tags.find(tag => tag && !genericTags.has(tag));
+    return businessTag ? `${type.label} / ${businessTag}` : type.label;
   };
 
   // 通用标签不代表业务模块，优先使用模块名分组。
@@ -731,6 +758,7 @@ function showFragmentDetail(fragmentId) {
   const nodeColor = circle.getAttribute('fill') || '#6366f1';
   
   const tags = Array.isArray(fragment.tags) ? fragment.tags : [];
+  const knowledgeType = getKnowledgeType(fragment);
 
   card.innerHTML = `
     <div class="flipbook-inner" style="background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.15); width: 340px; max-height: min(520px, calc(100vh - 48px)); overflow: hidden; display: flex; flex-direction: column;">
@@ -756,6 +784,11 @@ function showFragmentDetail(fragmentId) {
       
       <!-- 详情 -->
       <div style="padding: 12px 18px; overflow-y: auto; flex: 1; min-height: 0;">
+        <div style="background: #f0fdf4; border: 1px solid #dcfce7; border-radius: 10px; padding: 10px; margin-bottom: 12px;">
+          <div style="font-size: 11px; color: #16a34a; margin-bottom: 4px;">知识类型</div>
+          <div style="font-size: 13px; color: #166534; font-weight: 600;">${escapeHtml(knowledgeType.label)}</div>
+        </div>
+
         <div style="display: flex; gap: 12px; margin-bottom: 12px;">
           <div style="flex: 1; background: #f9f9f9; border-radius: 10px; padding: 12px; text-align: center;">
             <div style="font-size: 20px; font-weight: 600; color: #333;">${fragment.usage_count || 0}</div>

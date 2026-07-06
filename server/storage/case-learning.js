@@ -34,6 +34,8 @@ function syncSessionCasesToKnowledge(session) {
       const caseKey = testCase.id || `${categoryIndex}-${caseIndex}`;
       const sourceRef = `${prefix}${encodeURIComponent(String(caseKey))}`;
       const tags = [...new Set([
+        'knowledgeType:case_reference',
+        'case_reference',
         '历史用例',
         '测试用例',
         session.mindMap?.title || session.title,

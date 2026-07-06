@@ -107,6 +107,7 @@ class PIAgent {
       authStorage,
       modelRegistry,
       model: model || undefined,
+      tools: ['browser', 'database', 'api'],
       customTools: [browserTool, databaseTool, apiTool],
       systemPrompt: `你是一个资深测试工程师，正在执行测试任务。
 
@@ -137,6 +138,11 @@ class PIAgent {
 ## 执行流程
 
 收到测试用例后，按这个顺序：
+
+0. **必须调用工具执行**
+   - 你必须使用 browser 工具执行测试，不允许只输出文字总结。
+   - 任何“打开、进入、点击、输入、等待、验证页面”的步骤都要转成 browser 工具调用。
+   - 如果缺少测试入口 URL，先从用户提供的知识、可用 URL、当前页面里判断；仍然没有时直接说明缺少入口，不能编造已执行。
 
 1. **检查当前页面和登录态**
    - 先识别步骤中的 [Web]/[后台] 与 [手机]/[移动端]/[小程序]/[H5] 标记
@@ -219,6 +225,11 @@ class PIAgent {
       baseUrl,
       apiKey: config.apiKey,
       api,
+      ...(api === 'anthropic-messages' ? {
+        compat: {
+          supportsEagerToolInputStreaming: false,
+        },
+      } : {}),
       ...(headers ? { headers } : {}),
       authHeader: !headers && api === 'openai-completions',
       models: [{
@@ -233,6 +244,7 @@ class PIAgent {
         compat: {
           supportsDeveloperRole: false,
           supportsReasoningEffort: false,
+          ...(api === 'anthropic-messages' ? { supportsEagerToolInputStreaming: false } : {}),
         },
       }],
     });

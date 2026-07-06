@@ -80,6 +80,8 @@ class BatchExecutor {
         reportDir: this.reportDir,
         preferredScriptId: options.preferredScriptId,
         scriptOnly: options.scriptOnly,
+        targetUrl: options.targetUrl || options.url || '',
+        projectName: options.projectName || options.productName || title || '',
       });
       onLog({
         type: 'system',
@@ -89,9 +91,15 @@ class BatchExecutor {
       this.runner = new EnhancedRunner({
         reportId: report.id,
         reportDir: this.reportDir,
+        targetUrl: options.targetUrl || options.url || '',
+        projectName: options.projectName || options.productName || title || '',
       });
       onLog({ type: 'system', text: '使用快速模式' });
     }
+
+    const casesToExecute = usePIEngine
+      ? cases
+      : this.applyExecutionKnowledgeToFastCases(cases, options, onLog);
 
     let passedCount = 0;
     let failedCount = 0;
@@ -104,14 +112,14 @@ class BatchExecutor {
       onLog({ type: 'divider', text: '' });
 
       // 逐个执行用例
-      for (let i = 0; i < cases.length; i++) {
+      for (let i = 0; i < casesToExecute.length; i++) {
         // 检查是否被停止
         if (this.stopped) {
           onLog({ type: 'system', text: '用户已停止执行' });
           break;
         }
         
-	        const testCase = cases[i];
+	        const testCase = casesToExecute[i];
 	        let videoRecorder = null;
 	        let nativeVideoStarted = false;
 
@@ -130,12 +138,14 @@ class BatchExecutor {
 	        try {
 	          if (typeof this.runner.startNativeVideo === 'function') {
 	            try {
-	              await this.runner.startNativeVideo({
+	              const nativeVideoSession = await this.runner.startNativeVideo({
 	                reportDir: this.reportDir,
 	                caseId: testCase.id || `case_${i + 1}`,
 	              });
-	              nativeVideoStarted = true;
-	              onLog({ type: 'system', text: '已启用 Playwright 原生录屏（失败时保留）' });
+	              if (nativeVideoSession) {
+	                nativeVideoStarted = true;
+	                onLog({ type: 'system', text: '已启用 Playwright 原生录屏（失败时保留）' });
+	              }
 	            } catch (error) {
 	              onLog({ type: 'stderr', text: `Playwright 原生录屏启动失败，改用截图合成兜底：${error.message}` });
 	            }
@@ -262,12 +272,47 @@ class BatchExecutor {
 
     return {
       reportId: report.id,
-      total: cases.length,
+      total: casesToExecute.length,
       passed: passedCount,
       failed: failedCount,
       stopped: wasStopped || this.stopped,
       durationMs: totalDuration,
     };
+  }
+
+  applyExecutionKnowledgeToFastCases(cases, options = {}, onLog = () => {}) {
+    const resolver = new PIEngineRunner({
+      targetUrl: options.targetUrl || options.url || '',
+      projectName: options.projectName || options.productName || '',
+    });
+    return cases.map(testCase => {
+      const steps = Array.isArray(testCase.steps) ? [...testCase.steps] : [];
+      const hasExplicitUrl = steps.some(step => /https?:\/\/[^\s，。、；]+/i.test(step));
+      const needsWebEntry = steps.some(step => /打开.*(Web\s*测试入口|测试入口|后台|系统入口|入口)/i.test(step));
+      if (hasExplicitUrl || !needsWebEntry) return testCase;
+
+      const knowledge = resolver.retrieveKnowledge(testCase);
+      if (!knowledge.preferredUrl) {
+        onLog({
+          type: 'stderr',
+          text: `快速模式缺少入口配置：${testCase.title || '未命名用例'}`,
+        });
+        return testCase;
+      }
+      onLog({
+        type: 'info',
+        text: `快速模式已使用执行知识补充入口：${knowledge.preferredUrl}`,
+      });
+      const replacedSteps = steps.map(step =>
+        /打开.*(Web\s*测试入口|测试入口|后台|系统入口|入口)/i.test(step)
+          ? `打开 ${knowledge.preferredUrl}`
+          : step
+      );
+      return {
+        ...testCase,
+        steps: replacedSteps,
+      };
+    });
   }
 }
 

@@ -23,6 +23,25 @@ const { recall, recallWithAssociations, recordRecallUsage } = require('./recall'
 const { recallWithImages, findRelatedFragments, getImageKnowledgeGraph } = require('./image-recall');
 const { dream, getDreamLogs } = require('./dream');
 
+function classifyKnowledgeTags(content = '', tags = [], source = 'manual') {
+  const merged = new Set(Array.isArray(tags) ? tags.filter(Boolean) : []);
+  const text = String(content || '');
+  const looksLikeExecutionKnowledge = /https?:\/\/|Web\s*测试入口|web测试入口|后台地址|访问地址|入口地址|登录规则|登录前置|账号|用户名|密码/i.test(text);
+  if ((source === 'manual' || source === 'learned') && looksLikeExecutionKnowledge) {
+    merged.add('knowledgeType:execution');
+    merged.add('execution');
+    merged.add('执行配置');
+    if (/https?:\/\/|入口|地址|URL/i.test(text)) merged.add('入口配置');
+    if (/登录|账号|用户名|密码/i.test(text)) merged.add('登录配置');
+  }
+  if (source === 'test_case_history') {
+    merged.add('knowledgeType:case_reference');
+    merged.add('case_reference');
+    merged.add('历史学习');
+  }
+  return [...merged];
+}
+
 // 配置 multer 用于图片上传
 const storage = multer.memoryStorage();
 const upload = multer({ 
@@ -49,7 +68,7 @@ router.post('/fragments', (req, res) => {
       return res.status(400).json({ error: 'Content is required' });
     }
     
-    const fragment = createFragment(content, tags, source);
+    const fragment = createFragment(content, classifyKnowledgeTags(content, tags, source), source);
     res.json({ success: true, fragment });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -73,7 +92,7 @@ router.post('/fragments/with-image', upload.single('image'), async (req, res) =>
     }
     
     const parsedTags = typeof tags === 'string' ? JSON.parse(tags) : tags;
-    const fragment = createFragmentWithImage(content, parsedTags, source, imageBase64, imageDescription);
+    const fragment = createFragmentWithImage(content, classifyKnowledgeTags(content, parsedTags, source), source, imageBase64, imageDescription);
     res.json({ success: true, fragment });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -184,7 +203,8 @@ router.post('/fragments/extract', async (req, res) => {
     const saved = [];
     for (const f of fragments) {
       if (f.content && f.content.trim()) {
-        const fragment = createFragment(f.content.trim(), f.tags || [], 'learned');
+        const content = f.content.trim();
+        const fragment = createFragment(content, classifyKnowledgeTags(content, f.tags || [], 'learned'), 'learned');
         saved.push(fragment);
       }
     }

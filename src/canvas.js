@@ -48,6 +48,7 @@ class Canvas {
     // 文字测量 canvas
     this._measureCanvas = document.createElement('canvas');
     this._measureCtx = this._measureCanvas.getContext('2d');
+    this._caseClickTimer = null;
 
     this.init();
   }
@@ -364,6 +365,11 @@ class Canvas {
       el.innerHTML = `<div class="node-root">${this.escapeHtml(node.title)}</div>`;
     } else if (depth === 1) {
       el.innerHTML = `<div class="node-branch">${this.escapeHtml(node.title)}</div>`;
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.node-action-bar')) return;
+        this.showActionBar(el, node);
+      });
+      el.style.cursor = 'pointer';
     } else if (depth === 2) {
       const priority = node.priority || 'P1';
       const status = this.state.caseStatus[node.id];
@@ -381,15 +387,27 @@ class Canvas {
       const sourceAttr = node.source ? ` title="${this.escapeHtml(node.source)}"` : '';
       el.innerHTML = `<div class="node-leaf ${status ? 'node-leaf-' + status : ''}"${sourceAttr}><span class="priority-badge priority-${priority}">${priority}</span> ${this.escapeHtml(node.title)}${statusHtml}</div>`;
       
-      // 点击节点：显示操作栏
+      // 点击用例：直接执行，右键打开操作栏
       el.addEventListener('click', (e) => {
         if (e.target.closest('.node-action-bar')) return;
+        if (this._caseClickTimer) clearTimeout(this._caseClickTimer);
+        this._caseClickTimer = setTimeout(() => {
+          this._caseClickTimer = null;
+          this.onRunCase?.(node);
+        }, 220);
+      });
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
         this.showActionBar(el, node);
       });
       
       // 双击节点：编辑
       el.addEventListener('dblclick', (e) => {
         e.preventDefault();
+        if (this._caseClickTimer) {
+          clearTimeout(this._caseClickTimer);
+          this._caseClickTimer = null;
+        }
         this.onEditCase?.(node);
       });
       
@@ -421,6 +439,31 @@ class Canvas {
         delete this.state.caseStatus[nodeId];
       }
     }
+    this.persistCaseStatus();
+    this.renderAll();
+    this.updateCaseCount();
+  }
+
+  collectCaseNodeIds(node) {
+    const ids = [];
+    const walk = (item) => {
+      if (!item) return;
+      if ((item._depth || 0) === 2) ids.push(item.id);
+      (item.children || []).forEach(walk);
+    };
+    walk(node);
+    return ids;
+  }
+
+  applyStatusToNode(node, status) {
+    const caseIds = this.collectCaseNodeIds(node);
+    if (caseIds.length <= 1 && (node._depth || 0) === 2) {
+      this.toggleCaseStatus(node.id, status);
+      return;
+    }
+    caseIds.forEach(id => {
+      this.state.caseStatus[id] = status;
+    });
     this.persistCaseStatus();
     this.renderAll();
     this.updateCaseCount();
@@ -505,13 +548,16 @@ class Canvas {
     
     const bar = document.createElement('div');
     bar.className = 'node-action-bar';
+    const isModuleNode = (node._depth || 0) === 1;
     bar.innerHTML = `
       <button class="action-btn action-pass" data-status="pass">✓ Pass</button>
       <button class="action-btn action-fail" data-status="fail">✗ Fail</button>
       <button class="action-btn action-confirmed" data-status="confirmed">✦ 已确认</button>
       <button class="action-btn action-unconfirmed" data-status="unconfirmed">? 未确认</button>
       <button class="action-btn action-pending" data-status="pending">⋯ 待确认</button>
-      <button class="action-btn action-run" data-action="run">▶ 自动执行</button>
+      <button class="action-btn action-run" data-action="run">▶ ${isModuleNode ? '执行模块' : '自动执行'}</button>
+      ${isModuleNode ? '' : '<button class="action-btn action-edit" data-action="edit">编辑</button>'}
+      <button class="action-btn action-delete" data-action="delete">${isModuleNode ? '删除模块' : '删除'}</button>
     `;
     
     // 节点本身已经是 absolute，保持原定位，避免点击后发生位移。
@@ -527,9 +573,13 @@ class Canvas {
       const action = btn.dataset.action;
       
       if (status) {
-        this.toggleCaseStatus(node.id, status);
+        this.applyStatusToNode(node, status);
       } else if (action === 'run') {
         this.onRunCase?.(node);
+      } else if (action === 'edit') {
+        this.onEditCase?.(node);
+      } else if (action === 'delete') {
+        this.onDeleteCase?.(node);
       }
       
       this.hideActionBar();
