@@ -1,12 +1,13 @@
-// input: GitLab 配置、报告失败结果、手工 Bug 草稿与 AI 完善请求
-// output: GitLab Issue 配置、草稿、报告 Issue、手工 Bug 提交与 AI 完善 API
+// input: GitLab 配置、报告失败结果、手工 Bug 草稿、图片附件与 AI 完善请求
+// output: GitLab Issue 配置、草稿、报告 Issue、手工 Bug 提交、图片附件上传与 AI 完善 API
 // position: GitLab Issue 集成路由
 
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { callLLM } = require('../../ai/generate');
+const { callLLM, callLLMWithImage } = require('../../ai/generate');
 
 const {
   REPORTS_DIR,
@@ -143,6 +144,62 @@ function appendAttachmentNotes(description, uploaded = [], failed = []) {
   return `${description || ''}\n\n${sections.join('\n\n')}`;
 }
 
+function normalizeManualAttachments(attachments = []) {
+  if (!Array.isArray(attachments)) return [];
+  return attachments
+    .slice(0, 6)
+    .map((attachment, index) => {
+      const filename = path.basename(String(attachment.filename || `bug-image-${index + 1}.png`)).replace(/[^\w.\-\u4e00-\u9fa5]/g, '_');
+      const dataUrl = String(attachment.base64 || attachment.imageBase64 || '').trim();
+      const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
+      if (!match) return null;
+      const buffer = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
+      if (!buffer.length || buffer.length > 8 * 1024 * 1024) return null;
+      return {
+        label: attachment.label || `图片 ${index + 1}`,
+        filename,
+        mimeType: match[1],
+        base64: dataUrl,
+        buffer,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function uploadManualAttachments(config, attachments = []) {
+  const files = normalizeManualAttachments(attachments);
+  const uploaded = [];
+  const failed = [];
+  if (!files.length) return { uploaded, failed };
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-bug-'));
+  try {
+    for (const file of files) {
+      const filePath = path.join(tempDir, file.filename);
+      try {
+        fs.writeFileSync(filePath, file.buffer);
+        const upload = await uploadProjectFile(config, filePath, file.filename);
+        uploaded.push({
+          label: file.label,
+          filename: file.filename,
+          markdown: upload.markdown,
+          url: upload.full_path || upload.url,
+          upload,
+        });
+      } catch (error) {
+        failed.push({
+          label: file.label,
+          filename: file.filename,
+          error: error.message || String(error),
+        });
+      }
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+  return { uploaded, failed };
+}
+
 function parseJsonObject(text = '') {
   const raw = String(text || '').trim()
     .replace(/^```(?:json)?/i, '')
@@ -158,10 +215,12 @@ function parseJsonObject(text = '') {
 }
 
 async function enhanceManualBugDraft(input = {}) {
+  const attachments = normalizeManualAttachments(input.attachments);
   const systemPrompt = [
     '你是资深 QA，负责把用户很粗略的 Bug 描述整理成可提交 GitLab Issue 的中文 Markdown。',
     '必须严格保留用户模板的标题层级：# Bug、摘要、当前行为、期望行为、复现步骤、影响范围、证据、父 case / epic、验证信号。',
     '不要编造项目名、用户、日志、trace ID、父 case、真实接口响应；不确定的内容写“待确认”。',
+    '如果用户提供了图片，请把图片中能确认的界面、报错、字段、按钮、状态写进当前行为、复现步骤或证据里。',
     '复现步骤要尽量可执行；影响范围表格必须保留；输出必须是 JSON，不要输出解释文字。',
     'JSON 结构：{"title":"[Bug] ...","description":"完整 Markdown"}。'
   ].join('\n');
@@ -174,8 +233,12 @@ async function enhanceManualBugDraft(input = {}) {
     '',
     '【当前 Markdown 模板/草稿】',
     input.description || '',
+    '',
+    attachments.length ? `【图片附件】用户提供了 ${attachments.length} 张图片，请优先根据第一张图片可见内容完善 Bug。` : '【图片附件】未提供',
   ].join('\n');
-  const raw = await callLLM(systemPrompt, userContent);
+  const raw = attachments.length
+    ? await callLLMWithImage(systemPrompt, userContent, attachments[0].base64, 6000)
+    : await callLLM(systemPrompt, userContent);
   const parsed = parseJsonObject(raw);
   return {
     title: String(parsed.title || input.title || '[Bug] 待确认').trim(),
@@ -236,8 +299,10 @@ router.post('/issues', async (req, res) => {
       return res.status(400).json({ success: false, error: '请填写 Issue 描述' });
     }
 
+    const attachmentResult = await uploadManualAttachments(config, req.body?.attachments);
+    draft.description = appendAttachmentNotes(draft.description, attachmentResult.uploaded, attachmentResult.failed);
     const issue = await createIssue(config, draft);
-    res.json({ success: true, issue });
+    res.json({ success: true, issue, attachments: attachmentResult });
   } catch (error) {
     handleError(res, error, error.status || 500);
   }
@@ -245,6 +310,11 @@ router.post('/issues', async (req, res) => {
 
 router.post('/issues/enhance', async (req, res) => {
   try {
+    const attachments = normalizeManualAttachments(req.body?.attachments);
+    const hasTextSignal = Boolean(String(req.body?.brief || req.body?.title || req.body?.description || '').trim());
+    if (!hasTextSignal && attachments.length === 0) {
+      return res.status(400).json({ success: false, error: '请先填写 Bug 现象或上传图片' });
+    }
     const draft = await enhanceManualBugDraft(req.body || {});
     if (!draft.description) {
       return res.status(500).json({ success: false, error: 'AI 未返回有效 Bug 描述' });

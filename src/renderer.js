@@ -1,5 +1,5 @@
-// input: 同源 Web API、canvas.js、手工 Bug 草稿、AI 完善请求、本地与服务端历史分析报告
-// output: 视图切换、分析流程、AI 完善提 Bug、思维导图数据、可恢复的历史分析报告展示
+// input: 同源 Web API、canvas.js、手工 Bug 草稿、图片附件、AI 完善请求、本地与服务端历史分析报告
+// output: 视图切换、分析流程、支持图片的 AI 完善提 Bug、思维导图数据、可恢复的历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
@@ -444,6 +444,7 @@ async function showManualBugIssueModal() {
   if (existing) existing.remove();
 
   const modal = document.createElement('div');
+  modal.bugAttachments = [];
   modal.id = 'manual-bug-modal';
   modal.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm z-[240] flex items-center justify-center p-6';
   modal.innerHTML = `
@@ -459,6 +460,15 @@ async function showManualBugIssueModal() {
         <div>
           <label class="block text-xs font-medium text-zinc-500 mb-1.5">简单描述</label>
           <textarea id="manual-bug-brief" class="w-full h-24 px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 resize-y" placeholder="只写一句也可以，例如：点击采购需求后弹窗没出来，控制台没有明显报错。"></textarea>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 mb-1.5">图片证据</label>
+          <div class="flex flex-wrap items-center gap-2">
+            <button id="manual-bug-pick-images" class="px-3 py-2 text-sm text-zinc-600 border border-zinc-200 rounded-xl hover:bg-zinc-50 transition-colors" type="button">添加图片</button>
+            <span class="text-xs text-zinc-400">支持截图、报错、页面状态；AI 会读取第一张图，提交时会上传全部图片。</span>
+            <input id="manual-bug-images" class="hidden" type="file" accept="image/*" multiple>
+          </div>
+          <div id="manual-bug-image-list" class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3"></div>
         </div>
         <div>
           <label class="block text-xs font-medium text-zinc-500 mb-1.5">标题</label>
@@ -500,9 +510,72 @@ async function showManualBugIssueModal() {
   modal.querySelector('#manual-bug-config')?.addEventListener('click', () => {
     window.settingsManager?.openGitLabSettings?.();
   });
+  modal.querySelector('#manual-bug-pick-images')?.addEventListener('click', () => {
+    modal.querySelector('#manual-bug-images')?.click();
+  });
+  modal.querySelector('#manual-bug-images')?.addEventListener('change', event => {
+    addManualBugImages(modal, Array.from(event.target.files || []));
+    event.target.value = '';
+  });
   modal.querySelector('#manual-bug-enhance')?.addEventListener('click', () => enhanceManualBugIssue(modal));
   modal.querySelector('#manual-bug-submit')?.addEventListener('click', () => submitManualBugIssue(modal));
   modal.querySelector('#manual-bug-brief')?.focus();
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('图片读取失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addManualBugImages(modal, files = []) {
+  const images = files.filter(file => file.type.startsWith('image/')).slice(0, 6 - (modal.bugAttachments?.length || 0));
+  if (!images.length) {
+    setManualBugResult(modal, '请选择图片文件');
+    return;
+  }
+
+  for (const file of images) {
+    if (file.size > 8 * 1024 * 1024) {
+      setManualBugResult(modal, `${file.name} 超过 8MB，已跳过`);
+      continue;
+    }
+    try {
+      const base64 = await readFileAsDataUrl(file);
+      modal.bugAttachments.push({
+        id: `bug-image-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        filename: file.name || 'bug-image.png',
+        mimeType: file.type || 'image/png',
+        size: file.size,
+        base64,
+      });
+    } catch (error) {
+      setManualBugResult(modal, error.message || '图片读取失败');
+    }
+  }
+  renderManualBugImages(modal);
+}
+
+function renderManualBugImages(modal) {
+  const list = modal.querySelector('#manual-bug-image-list');
+  if (!list) return;
+  const attachments = modal.bugAttachments || [];
+  list.innerHTML = attachments.map(item => `
+    <div class="relative group border border-zinc-100 rounded-xl overflow-hidden bg-zinc-50">
+      <img src="${escapeHtml(item.base64)}" alt="${escapeHtml(item.filename)}" class="w-full aspect-video object-cover">
+      <div class="px-2 py-1.5 text-[11px] text-zinc-500 truncate" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</div>
+      <button class="manual-bug-remove-image absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[11px] rounded-md bg-white/90 text-zinc-500 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity" data-image-id="${escapeHtml(item.id)}" type="button">移除</button>
+    </div>
+  `).join('');
+  list.querySelectorAll('.manual-bug-remove-image').forEach(button => {
+    button.addEventListener('click', () => {
+      modal.bugAttachments = attachments.filter(item => item.id !== button.dataset.imageId);
+      renderManualBugImages(modal);
+    });
+  });
 }
 
 function setManualBugResult(modal, message, type = 'error') {
@@ -519,6 +592,11 @@ function readManualBugDraft(modal) {
     description: modal.querySelector('#manual-bug-description')?.value.trim() || '',
     labels: modal.querySelector('#manual-bug-labels')?.value.trim() || '',
     assigneeIds: modal.querySelector('#manual-bug-assignees')?.value.trim() || '',
+    attachments: (modal.bugAttachments || []).map(item => ({
+      filename: item.filename,
+      mimeType: item.mimeType,
+      base64: item.base64,
+    })),
   };
 }
 
@@ -526,8 +604,8 @@ async function enhanceManualBugIssue(modal) {
   const button = modal.querySelector('#manual-bug-enhance');
   const draft = readManualBugDraft(modal);
   const isTemplateOnly = draft.description === BUG_ISSUE_TEMPLATE;
-  if (!draft.brief && (!draft.title || draft.title === '[Bug]') && isTemplateOnly) {
-    setManualBugResult(modal, '先简单写一句 Bug 现象，我再帮你补完整');
+  if (!draft.brief && !draft.attachments.length && (!draft.title || draft.title === '[Bug]') && isTemplateOnly) {
+    setManualBugResult(modal, '先简单写一句 Bug 现象，或添加一张截图，我再帮你补完整');
     return;
   }
 
@@ -560,7 +638,7 @@ async function enhanceManualBugIssue(modal) {
 
 async function submitManualBugIssue(modal) {
   const button = modal.querySelector('#manual-bug-submit');
-  const { title, description, labels, assigneeIds } = readManualBugDraft(modal);
+  const { title, description, labels, assigneeIds, attachments } = readManualBugDraft(modal);
 
   if (!title || title === '[Bug]') {
     setManualBugResult(modal, '请填写 Issue 标题');
@@ -581,11 +659,13 @@ async function submitManualBugIssue(modal) {
     const response = await fetch(`${API_BASE}/gitlab/issues`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, labels, assigneeIds })
+      body: JSON.stringify({ title, description, labels, assigneeIds, attachments })
     });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || '提交 GitLab Issue 失败');
-    setManualBugResult(modal, `GitLab Issue 已创建：#${data.issue?.iid || data.issue?.id || ''}`, 'success');
+    const uploadedCount = data.attachments?.uploaded?.length || 0;
+    const suffix = uploadedCount ? `，已上传 ${uploadedCount} 张图片` : '';
+    setManualBugResult(modal, `GitLab Issue 已创建：#${data.issue?.iid || data.issue?.id || ''}${suffix}`, 'success');
     if (data.issue?.web_url) {
       window.open(data.issue.web_url, '_blank', 'noreferrer');
     }
