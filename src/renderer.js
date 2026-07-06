@@ -1,5 +1,5 @@
-// input: 同源 Web API、canvas.js、手工 Bug 草稿、本地与服务端历史分析报告
-// output: 视图切换、分析流程、提 Bug、思维导图数据、可恢复的历史分析报告展示
+// input: 同源 Web API、canvas.js、手工 Bug 草稿、AI 完善请求、本地与服务端历史分析报告
+// output: 视图切换、分析流程、AI 完善提 Bug、思维导图数据、可恢复的历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
@@ -457,6 +457,10 @@ async function showManualBugIssueModal() {
       </div>
       <div class="flex-1 overflow-y-auto p-5 space-y-4">
         <div>
+          <label class="block text-xs font-medium text-zinc-500 mb-1.5">简单描述</label>
+          <textarea id="manual-bug-brief" class="w-full h-24 px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 resize-y" placeholder="只写一句也可以，例如：点击采购需求后弹窗没出来，控制台没有明显报错。"></textarea>
+        </div>
+        <div>
           <label class="block text-xs font-medium text-zinc-500 mb-1.5">标题</label>
           <input id="manual-bug-title" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="[Bug] " placeholder="[Bug] 一句话说明哪里坏了">
         </div>
@@ -479,6 +483,7 @@ async function showManualBugIssueModal() {
       <div class="px-5 py-4 border-t border-zinc-100 flex items-center justify-between gap-3 bg-zinc-50">
         <button id="manual-bug-config" class="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-lg hover:bg-white transition-colors">GitLab 配置</button>
         <div class="flex items-center gap-2">
+          <button id="manual-bug-enhance" class="px-4 py-2 text-sm text-zinc-700 border border-zinc-200 rounded-lg hover:bg-white transition-colors">AI 完善</button>
           <button class="manual-bug-close px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-lg hover:bg-white transition-colors">取消</button>
           <button id="manual-bug-submit" class="px-4 py-2 text-sm font-medium text-white bg-zinc-900 hover:bg-zinc-800 rounded-lg transition-colors">提交 Issue</button>
         </div>
@@ -495,29 +500,74 @@ async function showManualBugIssueModal() {
   modal.querySelector('#manual-bug-config')?.addEventListener('click', () => {
     window.settingsManager?.openGitLabSettings?.();
   });
+  modal.querySelector('#manual-bug-enhance')?.addEventListener('click', () => enhanceManualBugIssue(modal));
   modal.querySelector('#manual-bug-submit')?.addEventListener('click', () => submitManualBugIssue(modal));
-  modal.querySelector('#manual-bug-title')?.focus();
+  modal.querySelector('#manual-bug-brief')?.focus();
+}
+
+function setManualBugResult(modal, message, type = 'error') {
+  const resultEl = modal.querySelector('#manual-bug-result');
+  if (!resultEl) return;
+  resultEl.className = `text-sm rounded-xl px-3 py-2 ${type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`;
+  resultEl.textContent = message;
+}
+
+function readManualBugDraft(modal) {
+  return {
+    brief: modal.querySelector('#manual-bug-brief')?.value.trim() || '',
+    title: modal.querySelector('#manual-bug-title')?.value.trim() || '',
+    description: modal.querySelector('#manual-bug-description')?.value.trim() || '',
+    labels: modal.querySelector('#manual-bug-labels')?.value.trim() || '',
+    assigneeIds: modal.querySelector('#manual-bug-assignees')?.value.trim() || '',
+  };
+}
+
+async function enhanceManualBugIssue(modal) {
+  const button = modal.querySelector('#manual-bug-enhance');
+  const draft = readManualBugDraft(modal);
+  const isTemplateOnly = draft.description === BUG_ISSUE_TEMPLATE;
+  if (!draft.brief && (!draft.title || draft.title === '[Bug]') && isTemplateOnly) {
+    setManualBugResult(modal, '先简单写一句 Bug 现象，我再帮你补完整');
+    return;
+  }
+
+  const originalText = button?.textContent || 'AI 完善';
+  if (button) {
+    button.disabled = true;
+    button.textContent = '完善中...';
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/gitlab/issues/enhance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(draft)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'AI 完善失败');
+    if (data.draft?.title) modal.querySelector('#manual-bug-title').value = data.draft.title;
+    if (data.draft?.description) modal.querySelector('#manual-bug-description').value = data.draft.description;
+    setManualBugResult(modal, 'AI 已完善草稿，提交前可以继续修改', 'success');
+  } catch (error) {
+    setManualBugResult(modal, error.message || 'AI 完善失败');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
 }
 
 async function submitManualBugIssue(modal) {
-  const resultEl = modal.querySelector('#manual-bug-result');
   const button = modal.querySelector('#manual-bug-submit');
-  const title = modal.querySelector('#manual-bug-title')?.value.trim();
-  const description = modal.querySelector('#manual-bug-description')?.value.trim();
-  const labels = modal.querySelector('#manual-bug-labels')?.value.trim();
-  const assigneeIds = modal.querySelector('#manual-bug-assignees')?.value.trim();
-  const showResult = (message, type = 'error') => {
-    if (!resultEl) return;
-    resultEl.className = `text-sm rounded-xl px-3 py-2 ${type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`;
-    resultEl.textContent = message;
-  };
+  const { title, description, labels, assigneeIds } = readManualBugDraft(modal);
 
   if (!title || title === '[Bug]') {
-    showResult('请填写 Issue 标题');
+    setManualBugResult(modal, '请填写 Issue 标题');
     return;
   }
   if (!description) {
-    showResult('请填写 Issue 描述');
+    setManualBugResult(modal, '请填写 Issue 描述');
     return;
   }
 
@@ -535,12 +585,12 @@ async function submitManualBugIssue(modal) {
     });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || '提交 GitLab Issue 失败');
-    showResult(`GitLab Issue 已创建：#${data.issue?.iid || data.issue?.id || ''}`, 'success');
+    setManualBugResult(modal, `GitLab Issue 已创建：#${data.issue?.iid || data.issue?.id || ''}`, 'success');
     if (data.issue?.web_url) {
       window.open(data.issue.web_url, '_blank', 'noreferrer');
     }
   } catch (error) {
-    showResult(error.message || '提交 GitLab Issue 失败');
+    setManualBugResult(modal, error.message || '提交 GitLab Issue 失败');
   } finally {
     if (button) {
       button.disabled = false;

@@ -1,11 +1,12 @@
-// input: GitLab 配置、报告失败结果、手工 Bug 草稿
-// output: GitLab Issue 配置、草稿、报告 Issue 与手工 Bug 提交 API
+// input: GitLab 配置、报告失败结果、手工 Bug 草稿与 AI 完善请求
+// output: GitLab Issue 配置、草稿、报告 Issue、手工 Bug 提交与 AI 完善 API
 // position: GitLab Issue 集成路由
 
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const { callLLM } = require('../../ai/generate');
 
 const {
   REPORTS_DIR,
@@ -142,6 +143,46 @@ function appendAttachmentNotes(description, uploaded = [], failed = []) {
   return `${description || ''}\n\n${sections.join('\n\n')}`;
 }
 
+function parseJsonObject(text = '') {
+  const raw = String(text || '').trim()
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim();
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw error;
+    return JSON.parse(match[0]);
+  }
+}
+
+async function enhanceManualBugDraft(input = {}) {
+  const systemPrompt = [
+    '你是资深 QA，负责把用户很粗略的 Bug 描述整理成可提交 GitLab Issue 的中文 Markdown。',
+    '必须严格保留用户模板的标题层级：# Bug、摘要、当前行为、期望行为、复现步骤、影响范围、证据、父 case / epic、验证信号。',
+    '不要编造项目名、用户、日志、trace ID、父 case、真实接口响应；不确定的内容写“待确认”。',
+    '复现步骤要尽量可执行；影响范围表格必须保留；输出必须是 JSON，不要输出解释文字。',
+    'JSON 结构：{"title":"[Bug] ...","description":"完整 Markdown"}。'
+  ].join('\n');
+  const userContent = [
+    '【用户粗略描述】',
+    input.brief || '未提供',
+    '',
+    '【当前标题】',
+    input.title || '',
+    '',
+    '【当前 Markdown 模板/草稿】',
+    input.description || '',
+  ].join('\n');
+  const raw = await callLLM(systemPrompt, userContent);
+  const parsed = parseJsonObject(raw);
+  return {
+    title: String(parsed.title || input.title || '[Bug] 待确认').trim(),
+    description: String(parsed.description || input.description || '').trim(),
+  };
+}
+
 router.get('/config', (req, res) => {
   try {
     res.json({ success: true, config: redactGitLabConfig() });
@@ -197,6 +238,18 @@ router.post('/issues', async (req, res) => {
 
     const issue = await createIssue(config, draft);
     res.json({ success: true, issue });
+  } catch (error) {
+    handleError(res, error, error.status || 500);
+  }
+});
+
+router.post('/issues/enhance', async (req, res) => {
+  try {
+    const draft = await enhanceManualBugDraft(req.body || {});
+    if (!draft.description) {
+      return res.status(500).json({ success: false, error: 'AI 未返回有效 Bug 描述' });
+    }
+    res.json({ success: true, draft });
   } catch (error) {
     handleError(res, error, error.status || 500);
   }
