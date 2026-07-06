@@ -37,6 +37,9 @@ server/
 │   ├── adb-device.js     # USB/无线 ADB、UIAutomator 操作与截图
 │   ├── routes.js         # 设备状态、连接和配对 API
 │   └── README.md
+├── integrations/         # 第三方集成
+│   ├── gitlab/           # GitLab Issue 配置、报告 Bug 和手工 Bug 提交
+│   └── README.md
 ├── executor/             # 旧版执行器（兼容）
 │   ├── pi-runner.js      # PI 引擎适配器
 │   ├── auto-runner.js    # 自动化执行器

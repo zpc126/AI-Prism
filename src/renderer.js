@@ -1,5 +1,5 @@
-// input: 同源 Web API、canvas.js、本地与服务端历史分析报告
-// output: 视图切换、分析流程、思维导图数据、可恢复的历史分析报告展示
+// input: 同源 Web API、canvas.js、手工 Bug 草稿、本地与服务端历史分析报告
+// output: 视图切换、分析流程、提 Bug、思维导图数据、可恢复的历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
@@ -125,6 +125,48 @@ window.openUploadedFilePreview = function(fileId) {
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 const ANALYSIS_HISTORY_KEY = 'prism_analysis_reports';
+const BUG_ISSUE_TEMPLATE = `# Bug
+
+> 记录缺陷、错误行为或回归问题。若它属于 CR / INC / DEV case，请挂到对应父 case / epic 下。
+
+## 摘要
+
+<!-- 一句话说明哪里坏了。 -->
+
+## 当前行为
+
+<!-- 实际发生了什么。附截图、日志、接口响应、单号或 pipeline 链接。 -->
+
+## 期望行为
+
+<!-- 正常情况下应该是什么结果。 -->
+
+## 复现步骤
+
+1.
+2.
+3.
+
+## 影响范围
+
+| 字段 | 内容 |
+| --- | --- |
+| 严重度 | P0 / P1 / P2 / P3 / 待确认 |
+| 影响用户 / 现场 |  |
+| 影响仓库 / 服务 |  |
+| 数据风险 | 无 / 读失败 / 写失败 / 错写 / 待确认 |
+
+## 证据
+
+<!-- 日志、截图、trace ID、配置、MR、发布 tag、测试用例链接。 -->
+
+## 父 case / epic
+
+<!-- 如果该 bug 属于某个 CR / INC / DEV case，在这里贴链接。 -->
+
+## 验证信号
+
+<!-- 用什么事实判断 bug 已修复。 -->`;
 let analysisHistorySyncPromise = null;
 
 function getAnalysisHistory() {
@@ -384,6 +426,127 @@ function showManualCopyUrl(url) {
   modal.addEventListener('click', event => {
     if (event.target === modal) modal.remove();
   });
+}
+
+async function getManualBugIssueDefaults() {
+  try {
+    const response = await fetch(`${API_BASE}/gitlab/config`);
+    const data = await response.json();
+    return data.success ? (data.config || {}) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function showManualBugIssueModal() {
+  const config = await getManualBugIssueDefaults();
+  const existing = document.getElementById('manual-bug-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'manual-bug-modal';
+  modal.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm z-[240] flex items-center justify-center p-6';
+  modal.innerHTML = `
+    <div class="bg-white rounded-2xl border border-zinc-100 shadow-2xl w-full max-w-4xl max-h-[88vh] overflow-hidden flex flex-col">
+      <div class="px-5 py-4 border-b border-zinc-100 flex items-center justify-between gap-4">
+        <div>
+          <h3 class="text-base font-medium text-zinc-800">提交 Bug</h3>
+          <p class="text-xs text-zinc-400 mt-1">按模板编辑后提交到当前 GitLab 项目</p>
+        </div>
+        <button class="manual-bug-close p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">关闭</button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-5 space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 mb-1.5">标题</label>
+          <input id="manual-bug-title" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="[Bug] " placeholder="[Bug] 一句话说明哪里坏了">
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-zinc-500 mb-1.5">Labels</label>
+            <input id="manual-bug-labels" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(config.labels || 'bug,Prism')}" placeholder="bug,Prism">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-zinc-500 mb-1.5">Assignee IDs</label>
+            <input id="manual-bug-assignees" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(config.assigneeIds || '')}" placeholder="多个 ID 用英文逗号分隔">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 mb-1.5">描述</label>
+          <textarea id="manual-bug-description" class="w-full h-[420px] px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 font-mono leading-6 resize-y">${escapeHtml(BUG_ISSUE_TEMPLATE)}</textarea>
+        </div>
+        <div id="manual-bug-result" class="hidden text-sm rounded-xl px-3 py-2"></div>
+      </div>
+      <div class="px-5 py-4 border-t border-zinc-100 flex items-center justify-between gap-3 bg-zinc-50">
+        <button id="manual-bug-config" class="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-lg hover:bg-white transition-colors">GitLab 配置</button>
+        <div class="flex items-center gap-2">
+          <button class="manual-bug-close px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-lg hover:bg-white transition-colors">取消</button>
+          <button id="manual-bug-submit" class="px-4 py-2 text-sm font-medium text-white bg-zinc-900 hover:bg-zinc-800 rounded-lg transition-colors">提交 Issue</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  modal.querySelectorAll('.manual-bug-close').forEach(button => button.addEventListener('click', close));
+  modal.addEventListener('click', event => {
+    if (event.target === modal) close();
+  });
+  modal.querySelector('#manual-bug-config')?.addEventListener('click', () => {
+    window.settingsManager?.openGitLabSettings?.();
+  });
+  modal.querySelector('#manual-bug-submit')?.addEventListener('click', () => submitManualBugIssue(modal));
+  modal.querySelector('#manual-bug-title')?.focus();
+}
+
+async function submitManualBugIssue(modal) {
+  const resultEl = modal.querySelector('#manual-bug-result');
+  const button = modal.querySelector('#manual-bug-submit');
+  const title = modal.querySelector('#manual-bug-title')?.value.trim();
+  const description = modal.querySelector('#manual-bug-description')?.value.trim();
+  const labels = modal.querySelector('#manual-bug-labels')?.value.trim();
+  const assigneeIds = modal.querySelector('#manual-bug-assignees')?.value.trim();
+  const showResult = (message, type = 'error') => {
+    if (!resultEl) return;
+    resultEl.className = `text-sm rounded-xl px-3 py-2 ${type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`;
+    resultEl.textContent = message;
+  };
+
+  if (!title || title === '[Bug]') {
+    showResult('请填写 Issue 标题');
+    return;
+  }
+  if (!description) {
+    showResult('请填写 Issue 描述');
+    return;
+  }
+
+  const originalText = button?.textContent || '提交 Issue';
+  if (button) {
+    button.disabled = true;
+    button.textContent = '提交中...';
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/gitlab/issues`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description, labels, assigneeIds })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '提交 GitLab Issue 失败');
+    showResult(`GitLab Issue 已创建：#${data.issue?.iid || data.issue?.id || ''}`, 'success');
+    if (data.issue?.web_url) {
+      window.open(data.issue.web_url, '_blank', 'noreferrer');
+    }
+  } catch (error) {
+    showResult(error.message || '提交 GitLab Issue 失败');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
 }
 
 async function copyAnalysisReportUrl(report, button) {
@@ -875,6 +1038,7 @@ function initViewInput() {
 
   $('#btn-analysis-history')?.addEventListener('click', showAnalysisHistoryModal);
   updateAnalysisHistoryEntry();
+  $('#btn-submit-bug')?.addEventListener('click', showManualBugIssueModal);
 
   input.addEventListener('input', () => {
     state.requirement = input.value.trim();

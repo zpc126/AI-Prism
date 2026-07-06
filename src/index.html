@@ -1,5 +1,5 @@
-<!-- input: 用户需求、配置和自动化执行入口 -->
-<!-- output: Prism 主界面、画布、报告、大脑入口与可恢复历史分析报告入口 -->
+<!-- input: 用户需求、配置、手工 Bug 草稿和自动化执行入口 -->
+<!-- output: Prism 主界面、画布、报告、大脑入口、提 Bug 与可恢复历史分析报告入口 -->
 <!-- position: 前端主页面结构 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -32,6 +32,15 @@
 	            <path d="M5 5.5h6M5 8h6M5 10.5h3"/>
 	          </svg>
 	          <span>GitLab</span>
+	        </button>
+
+	        <button id="btn-submit-bug" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
+	          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+	            <path d="M8 2.5v2M8 11.5v2M4.5 5.5h7M4.5 10.5h7"/>
+	            <rect x="4" y="4.5" width="8" height="7" rx="2"/>
+	            <path d="M2.5 7h2M11.5 7h2M2.5 9h2M11.5 9h2"/>
+	          </svg>
+	          <span>提 Bug</span>
 	        </button>
 	        
 	        <!-- History 按钮 -->
@@ -1043,12 +1052,12 @@
 	    </div>
 	  </div>
 
-		  <script src="canvas.js?v=20260706-history"></script>
-	  <script src="renderer.js?v=20260706-history"></script>
-	  <script src="script-library.js?v=20260706-history"></script>
-	  <script src="brain.js?v=20260706-history"></script>
-	  <script src="eval.js?v=20260706-history"></script>
-	  <script src="settings.js?v=20260706-history"></script>
-	  <script src="welcome.js?v=20260706-history"></script>
+		  <script src="canvas.js?v=20260706-bug"></script>
+	  <script src="renderer.js?v=20260706-bug"></script>
+	  <script src="script-library.js?v=20260706-bug"></script>
+	  <script src="brain.js?v=20260706-bug"></script>
+	  <script src="eval.js?v=20260706-bug"></script>
+	  <script src="settings.js?v=20260706-bug"></script>
+	  <script src="welcome.js?v=20260706-bug"></script>
 </body>
 </html>
