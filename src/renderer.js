@@ -157,15 +157,155 @@ function updateAnalysisHistoryReport(updatedReport) {
 }
 
 function normalizeAnalysisHistoryReport(report = {}) {
+  const normalizedReport = normalizeAnalysisReportPayload(report.report || report);
   return {
     id: report.id || `analysis-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     title: report.title || '需求分析报告',
     createdAt: report.createdAt || report.time || report.date || new Date().toISOString(),
-    summary: report.summary || report.report?.summary || '',
+    summary: report.summary || normalizedReport.summary || '',
     requirement: report.requirement || report.source || '',
-    plainText: report.plainText || report.content || report.text || '',
-    report: report.report && typeof report.report === 'object' ? report.report : {}
+    plainText: report.plainText || report.content || report.text || report.markdown || report.rawText || report.raw || '',
+    moduleCount: report.moduleCount ?? normalizedReport.modules.length,
+    riskCount: report.riskCount ?? normalizedReport.cases.filter(c => c.category !== '待确认').length,
+    questionCount: report.questionCount ?? normalizedReport.questions.length,
+    report: normalizedReport
   };
+}
+
+function normalizeAnalysisReportPayload(payload = {}) {
+  const source = unwrapAnalysisPayload(payload);
+  const modules = normalizeAnalysisModules(source.modules || source.moduleList || []);
+  const risks = collectAnalysisRisks(source);
+  const cases = risks.map(normalizeAnalysisRisk);
+  const questions = normalizeAnalysisQuestions(source.questions || cases
+    .filter(c => c.category === '待确认')
+    .map(c => c.title));
+  return {
+    type: source.type || 'analysis',
+    name: source.name || '需求分析',
+    summary: source.summary || source.overview || '',
+    modules,
+    testScope: source.testScope && typeof source.testScope === 'object'
+      ? source.testScope
+      : { inScope: [], outOfScope: [] },
+    questions,
+    acceptance: Array.isArray(source.acceptance) ? source.acceptance : [],
+    testStrategy: Array.isArray(source.testStrategy) ? source.testStrategy : [],
+    cases
+  };
+}
+
+function unwrapAnalysisPayload(payload = {}) {
+  const parsed = parseAnalysisMaybeJson(payload);
+  const queue = [parsed];
+  const seen = new Set();
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) continue;
+    if (typeof current === 'object') seen.add(current);
+
+    if (Array.isArray(current)) {
+      const analysisItem = current.find(item => item?.type === 'analysis')
+        || current.find(hasAnalysisSignals)
+        || (current.some(item => item?.title || item?.caseName) ? { cases: current } : null);
+      if (analysisItem) return unwrapAnalysisPayload(analysisItem);
+      continue;
+    }
+
+    if (typeof current !== 'object') continue;
+    if (Array.isArray(current.categories)) queue.push(current.categories);
+    ['report', 'analysis', 'data', 'result', 'payload'].forEach(key => {
+      if (current[key] && current[key] !== current) queue.push(parseAnalysisMaybeJson(current[key]));
+    });
+    if (hasAnalysisSignals(current)) return current;
+  }
+
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+function parseAnalysisMaybeJson(value) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed || !/^[\[{]/.test(trimmed)) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function hasAnalysisSignals(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Boolean(
+    value.type === 'analysis' ||
+    value.summary ||
+    value.overview ||
+    value.modules ||
+    value.moduleList ||
+    value.cases ||
+    value.risks ||
+    value.issues ||
+    value.questions ||
+    value.acceptance ||
+    value.testStrategy ||
+    value.testScope
+  );
+}
+
+function collectAnalysisRisks(source = {}) {
+  if (Array.isArray(source.cases)) return source.cases;
+  if (Array.isArray(source.risks)) return source.risks;
+  if (Array.isArray(source.issues)) return source.issues;
+  if (Array.isArray(source.categories)) {
+    const analysis = source.categories.find(item => item?.type === 'analysis') || source.categories.find(hasAnalysisSignals);
+    if (analysis) return collectAnalysisRisks(analysis);
+    return source.categories.flatMap(category => (category?.cases || []).map(item => ({
+      ...item,
+      category: item.category || category.name || category.type || '风险'
+    })));
+  }
+  return [];
+}
+
+function normalizeAnalysisModules(modules) {
+  if (!Array.isArray(modules)) return [];
+  return modules.map(module => {
+    if (typeof module === 'string') {
+      return { name: module, goal: '', flows: [], rules: [], data: [] };
+    }
+    return {
+      name: module.name || module.module || module.title || '未命名模块',
+      goal: module.goal || module.description || '',
+      flows: Array.isArray(module.flows) ? module.flows : [],
+      rules: Array.isArray(module.rules) ? module.rules : [],
+      data: Array.isArray(module.data) ? module.data : []
+    };
+  });
+}
+
+function normalizeAnalysisRisk(item = {}, index = 0) {
+  const steps = Array.isArray(item.steps)
+    ? item.steps
+    : [item.detail || item.description || item.testFocus || ''].filter(Boolean);
+  return {
+    ...item,
+    id: item.id || `analysis-risk-${index + 1}`,
+    title: item.title || item.name || `风险 ${index + 1}`,
+    priority: item.priority || item.severity || 'P1',
+    category: item.category || '风险',
+    steps,
+    expected: item.expected || item.suggestion || '',
+    testFocus: item.testFocus || ''
+  };
+}
+
+function normalizeAnalysisQuestions(questions) {
+  if (!Array.isArray(questions)) return [];
+  return questions.map(question => {
+    if (typeof question === 'string') return question;
+    return question.title || question.question || question.content || '';
+  }).filter(Boolean);
 }
 
 async function copyTextToClipboard(text) {
@@ -4041,7 +4181,7 @@ function showAnalysisResult(categories) {
 }
 
 function showAnalysisHistoryModal() {
-  const reports = getAnalysisHistory();
+  const reports = getAnalysisHistory().map(normalizeAnalysisHistoryReport);
   const existing = document.getElementById('analysis-history-modal');
   if (existing) existing.remove();
 
@@ -4117,7 +4257,7 @@ function showAnalysisHistoryModal() {
 
 function showAnalysisHistoryDetail(saved) {
   saved = normalizeAnalysisHistoryReport(saved);
-  const report = saved.report || {};
+  const report = normalizeAnalysisReportPayload(saved.report || saved);
   const risks = (report.cases || []).filter(c => c.category !== '待确认');
   const questions = report.questions?.length
     ? report.questions
@@ -4226,7 +4366,8 @@ function renderAnalysisReportBody({ report, risks, questions, modules, testScope
   `;
   const hasStructuredReport = Boolean(report.summary || modules.length || risks.length || questions.length || acceptance.length || testStrategy.length || testScope.inScope?.length || testScope.outOfScope?.length);
   if (!hasStructuredReport) {
-    return renderSection('报告内容', `<p class="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap">${escapeHtml(saved?.plainText || saved?.summary || '这是一份旧版历史报告，暂无结构化内容。')}</p>`);
+    const fallbackText = saved?.plainText || saved?.summary || saved?.requirement || JSON.stringify(saved?.report || {}, null, 2);
+    return renderSection('报告内容', `<p class="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap">${escapeHtml(fallbackText && fallbackText !== '{}' ? fallbackText : '这是一份旧版历史报告，暂无结构化内容。')}</p>`);
   }
   const modulesHtml = modules.length ? modules.map(module => `
     <div class="p-3 border border-zinc-100 rounded-xl bg-white">
