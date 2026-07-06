@@ -1,5 +1,5 @@
-// input: 同源 Web API、canvas.js、本地历史分析报告
-// output: 视图切换、分析流程、思维导图数据、历史分析报告展示
+// input: 同源 Web API、canvas.js、本地与服务端历史分析报告
+// output: 视图切换、分析流程、思维导图数据、可恢复的历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
@@ -125,6 +125,7 @@ window.openUploadedFilePreview = function(fileId) {
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 const ANALYSIS_HISTORY_KEY = 'prism_analysis_reports';
+let analysisHistorySyncPromise = null;
 
 function getAnalysisHistory() {
   try {
@@ -154,6 +155,41 @@ function updateAnalysisHistoryReport(updatedReport) {
   localStorage.setItem(ANALYSIS_HISTORY_KEY, JSON.stringify(reports));
   updateAnalysisHistoryEntry();
   return normalized;
+}
+
+function saveAnalysisHistoryList(reports) {
+  localStorage.setItem(ANALYSIS_HISTORY_KEY, JSON.stringify(reports));
+}
+
+function mergeAnalysisHistoryReports(localReports = [], incomingReports = []) {
+  const byId = new Map();
+  [...localReports, ...incomingReports]
+    .map(normalizeAnalysisHistoryReport)
+    .forEach(report => {
+      if (!report.id) return;
+      byId.set(report.id, { ...(byId.get(report.id) || {}), ...report });
+    });
+  return Array.from(byId.values())
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+async function syncAnalysisHistoryFromServer() {
+  if (analysisHistorySyncPromise) return analysisHistorySyncPromise;
+  analysisHistorySyncPromise = fetch(`${API_BASE}/analysis-reports`)
+    .then(response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then(data => {
+      const serverReports = Array.isArray(data.reports) ? data.reports : [];
+      const merged = mergeAnalysisHistoryReports(getAnalysisHistory(), serverReports);
+      saveAnalysisHistoryList(merged);
+      return merged;
+    })
+    .finally(() => {
+      analysisHistorySyncPromise = null;
+    });
+  return analysisHistorySyncPromise;
 }
 
 function normalizeAnalysisHistoryReport(report = {}) {
@@ -392,6 +428,13 @@ function updateAnalysisHistoryEntry() {
   const count = getAnalysisHistory().length;
   button.classList.toggle('hidden', state.activeTab !== 'analyze');
   button.textContent = count ? `历史报告 ${count}` : '历史报告';
+  syncAnalysisHistoryFromServer()
+    .then(reports => {
+      if (state.activeTab === 'analyze') {
+        button.textContent = reports.length ? `历史报告 ${reports.length}` : '历史报告';
+      }
+    })
+    .catch(() => {});
 }
 
 function getChatHistory() {
@@ -4180,8 +4223,9 @@ function showAnalysisResult(categories) {
   return historyReport;
 }
 
-function showAnalysisHistoryModal() {
-  const reports = getAnalysisHistory().map(normalizeAnalysisHistoryReport);
+async function showAnalysisHistoryModal() {
+  const reports = await syncAnalysisHistoryFromServer()
+    .catch(() => getAnalysisHistory().map(normalizeAnalysisHistoryReport));
   const existing = document.getElementById('analysis-history-modal');
   if (existing) existing.remove();
 

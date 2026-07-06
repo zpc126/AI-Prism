@@ -1,5 +1,5 @@
-// input: dotenv、express、业务路由、Web 静态资源、图片 base64 请求、分析报告分享请求
-// output: Prism Web 页面、HTTP API、WebSocket 服务、分析报告分享页
+// input: dotenv、express、业务路由、Web 静态资源、图片 base64 请求、分析报告分享与历史查询请求
+// output: Prism Web 页面、HTTP API、WebSocket 服务、分析报告分享页与历史列表
 // position: Web 应用服务入口，支持文档、图片需求分析与报告分享
 
 require('dotenv').config();
@@ -143,8 +143,29 @@ function normalizeSharedAnalysisReport(input = {}) {
     summary: input.summary || input.report?.summary || '',
     requirement: input.requirement || input.source || '',
     plainText: input.plainText || input.content || input.text || '',
+    moduleCount: input.moduleCount,
+    riskCount: input.riskCount,
+    questionCount: input.questionCount,
+    sharedAt: input.sharedAt || '',
     report: input.report && typeof input.report === 'object' ? input.report : {}
   };
+}
+
+function listSavedAnalysisReports() {
+  if (!fs.existsSync(ANALYSIS_REPORT_DIR)) return [];
+  return fs.readdirSync(ANALYSIS_REPORT_DIR)
+    .filter(file => file.endsWith('.json'))
+    .map(file => {
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(ANALYSIS_REPORT_DIR, file), 'utf-8'));
+        return normalizeSharedAnalysisReport(raw);
+      } catch (error) {
+        console.error('读取分析报告条目失败:', file, error.message);
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.sharedAt || b.createdAt).getTime() - new Date(a.sharedAt || a.createdAt).getTime());
 }
 
 function renderAnalysisReportHtml(input) {
@@ -344,6 +365,15 @@ app.post('/api/analysis-reports', (req, res) => {
     res.json({ success: true, id: saved.id, url: `/analysis-reports/${saved.id}` });
   } catch (error) {
     console.error('保存分析报告失败:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/analysis-reports', (req, res) => {
+  try {
+    res.json({ success: true, reports: listSavedAnalysisReports() });
+  } catch (error) {
+    console.error('读取分析报告列表失败:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
