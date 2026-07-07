@@ -1,5 +1,5 @@
-// input: GitLab 配置、Issue 草稿
-// output: GitLab API 调用结果
+// input: GitLab 配置、Issue 草稿、项目成员查询条件
+// output: GitLab API 调用结果、Issue 创建结果与项目成员列表
 // position: GitLab REST API 客户端
 
 const fetch = require('node-fetch');
@@ -20,7 +20,7 @@ function parseList(value) {
 function parseNumberList(value) {
   return parseList(value)
     .map(item => Number(item))
-    .filter(Number.isFinite);
+    .filter(number => Number.isInteger(number) && number > 0);
 }
 
 async function gitlabRequest(config, pathname, options = {}) {
@@ -64,13 +64,42 @@ async function testConnection(config) {
   };
 }
 
+async function listProjectMembers(config, query = '') {
+  const params = new URLSearchParams({ per_page: '100' });
+  const keyword = String(query || '').trim();
+  if (keyword) params.set('query', keyword);
+  const members = await gitlabRequest(config, `/api/v4/projects/${getProjectRef(config.projectId)}/members/all?${params.toString()}`);
+  return (Array.isArray(members) ? members : []).map(member => ({
+    id: member.id,
+    username: member.username,
+    name: member.name,
+    state: member.state,
+    avatar_url: member.avatar_url,
+    web_url: member.web_url,
+    access_level: member.access_level,
+  }));
+}
+
+async function resolveAssigneeIds(config, draft) {
+  const ids = parseNumberList(draft.assigneeIds || config.assigneeIds);
+  const usernames = parseList(draft.assigneeUsernames);
+  for (const username of usernames) {
+    const members = await listProjectMembers(config, username);
+    const matched = members.find(member => String(member.username || '').toLowerCase() === username.toLowerCase())
+      || members.find(member => String(member.name || '').toLowerCase() === username.toLowerCase())
+      || members[0];
+    if (matched?.id) ids.push(Number(matched.id));
+  }
+  return Array.from(new Set(ids)).filter(Number.isFinite);
+}
+
 async function createIssue(config, draft) {
   const payload = {
     title: draft.title,
     description: draft.description,
   };
   const labels = parseList(draft.labels || config.labels);
-  const assigneeIds = parseNumberList(draft.assigneeIds || config.assigneeIds);
+  const assigneeIds = await resolveAssigneeIds(config, draft);
   if (labels.length) payload.labels = labels.join(',');
   if (assigneeIds.length) payload.assignee_ids = assigneeIds;
 
@@ -119,6 +148,7 @@ async function uploadProjectFile(config, filePath, filename) {
 
 module.exports = {
   createIssue,
+  listProjectMembers,
   parseList,
   testConnection,
   uploadProjectFile,

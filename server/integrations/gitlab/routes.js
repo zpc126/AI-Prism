@@ -1,5 +1,5 @@
-// input: GitLab 配置、报告失败结果、手工 Bug 草稿、图片附件与 AI 完善请求
-// output: GitLab Issue 配置、草稿、报告 Issue、手工 Bug 提交、图片附件上传与 AI 完善 API
+// input: GitLab 配置、报告失败结果、手工 Bug 草稿、项目成员查询、图片附件与 AI 完善请求
+// output: GitLab Issue 配置、草稿、报告 Issue、项目成员、手工 Bug 提交、图片附件上传与 AI 完善 API
 // position: GitLab Issue 集成路由
 
 const express = require('express');
@@ -18,7 +18,7 @@ const {
   getTestResult,
 } = require('../../reports/report-store');
 const { buildIssueDraft } = require('./issue-builder');
-const { createIssue, testConnection, uploadProjectFile } = require('./client');
+const { createIssue, listProjectMembers, testConnection, uploadProjectFile } = require('./client');
 const { loadGitLabConfig, redactGitLabConfig, saveGitLabConfig } = require('./config');
 
 function handleError(res, error, status = 500) {
@@ -278,6 +278,19 @@ router.post('/test-connection', async (req, res) => {
   }
 });
 
+router.get('/users', async (req, res) => {
+  try {
+    const config = getGitLabConfigForReport(req);
+    if (!config.baseUrl || !config.projectId || !config.token) {
+      return res.status(400).json({ success: false, error: 'GitLab 配置不完整，请先到设置中填写' });
+    }
+    const users = await listProjectMembers(config, req.query.query || '');
+    res.json({ success: true, users });
+  } catch (error) {
+    handleError(res, error, error.status || 500);
+  }
+});
+
 router.post('/issues', async (req, res) => {
   try {
     const config = getGitLabConfigForReport(req);
@@ -290,6 +303,7 @@ router.post('/issues', async (req, res) => {
       description: String(req.body?.description || '').trim(),
       labels: req.body?.labels || config.labels,
       assigneeIds: req.body?.assigneeIds || config.assigneeIds,
+      assigneeUsernames: req.body?.assigneeUsernames || '',
     };
 
     if (!draft.title) {

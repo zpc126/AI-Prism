@@ -1,5 +1,5 @@
-// input: 同源 Web API、canvas.js、手工 Bug 草稿、图片附件/粘贴截图、AI 完善请求、本地与服务端历史分析报告
-// output: 视图切换、分析流程、支持图片和粘贴截图的 AI 完善提 Bug、思维导图数据、可恢复的历史分析报告展示
+// input: 同源 Web API、canvas.js、手工 Bug 草稿、GitLab 成员搜索、图片附件/粘贴截图、AI 完善请求、本地与服务端历史分析报告
+// output: 视图切换、分析流程、可指定负责人的 AI 完善提 Bug、思维导图数据、可恢复的历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
@@ -445,6 +445,7 @@ async function showManualBugIssueModal() {
 
   const modal = document.createElement('div');
   modal.bugAttachments = [];
+  modal.bugAssignees = parseManualBugAssigneeIds(config.assigneeIds);
   modal.id = 'manual-bug-modal';
   modal.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm z-[240] flex items-center justify-center p-6';
   modal.innerHTML = `
@@ -480,8 +481,11 @@ async function showManualBugIssueModal() {
             <input id="manual-bug-labels" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(config.labels || 'bug,Prism')}" placeholder="bug,Prism">
           </div>
           <div>
-            <label class="block text-xs font-medium text-zinc-500 mb-1.5">Assignee IDs</label>
-            <input id="manual-bug-assignees" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(config.assigneeIds || '')}" placeholder="多个 ID 用英文逗号分隔">
+            <label class="block text-xs font-medium text-zinc-500 mb-1.5">负责人</label>
+            <div id="manual-bug-assignee-selected" class="min-h-9 flex flex-wrap items-center gap-1.5 px-2 py-1.5 border border-zinc-200 rounded-xl bg-white"></div>
+            <input id="manual-bug-assignee-search" class="mt-2 w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" placeholder="搜索 GitLab 用户名或姓名">
+            <input id="manual-bug-assignees" type="hidden" value="${escapeHtml(config.assigneeIds || '')}">
+            <div id="manual-bug-assignee-list" class="hidden mt-2 max-h-40 overflow-y-auto border border-zinc-100 rounded-xl bg-white shadow-sm"></div>
           </div>
         </div>
         <div>
@@ -517,6 +521,7 @@ async function showManualBugIssueModal() {
     addManualBugImages(modal, Array.from(event.target.files || []));
     event.target.value = '';
   });
+  initManualBugAssigneePicker(modal);
   modal.querySelector('#manual-bug-enhance')?.addEventListener('click', () => enhanceManualBugIssue(modal));
   modal.querySelector('#manual-bug-submit')?.addEventListener('click', () => submitManualBugIssue(modal));
 
@@ -538,6 +543,94 @@ async function showManualBugIssueModal() {
   });
 
   modal.querySelector('#manual-bug-brief')?.focus();
+}
+
+function parseManualBugAssigneeIds(value = '') {
+  return String(value || '')
+    .split(',')
+    .map(item => Number(item.trim()))
+    .filter(number => Number.isInteger(number) && number > 0)
+    .map(id => ({ id, username: '', name: `ID ${id}` }));
+}
+
+function initManualBugAssigneePicker(modal) {
+  renderManualBugAssignees(modal);
+  const input = modal.querySelector('#manual-bug-assignee-search');
+  let timer = null;
+  const search = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => loadManualBugAssigneeUsers(modal, input?.value || ''), 220);
+  };
+  input?.addEventListener('input', search);
+  input?.addEventListener('focus', search);
+}
+
+function renderManualBugAssignees(modal) {
+  const selected = modal.querySelector('#manual-bug-assignee-selected');
+  const hidden = modal.querySelector('#manual-bug-assignees');
+  const assignees = modal.bugAssignees || [];
+  if (hidden) hidden.value = assignees.map(user => user.id).filter(Boolean).join(',');
+  if (!selected) return;
+  selected.innerHTML = assignees.length
+    ? assignees.map(user => `
+      <span class="inline-flex items-center gap-1 rounded-lg bg-zinc-100 px-2 py-1 text-xs text-zinc-600">
+        ${escapeHtml(user.username || user.name || `ID ${user.id}`)}
+        <button class="manual-bug-remove-assignee text-zinc-400 hover:text-zinc-700" data-user-id="${escapeHtml(user.id)}" type="button">×</button>
+      </span>
+    `).join('')
+    : '<span class="text-xs text-zinc-400">未指定</span>';
+  selected.querySelectorAll('.manual-bug-remove-assignee').forEach(button => {
+    button.addEventListener('click', () => {
+      modal.bugAssignees = assignees.filter(user => String(user.id) !== String(button.dataset.userId));
+      renderManualBugAssignees(modal);
+    });
+  });
+}
+
+async function loadManualBugAssigneeUsers(modal, query = '') {
+  const list = modal.querySelector('#manual-bug-assignee-list');
+  if (!list) return;
+  list.classList.remove('hidden');
+  list.innerHTML = '<div class="px-3 py-2 text-xs text-zinc-400">加载中...</div>';
+  try {
+    const response = await fetch(`${API_BASE}/gitlab/users?query=${encodeURIComponent(query)}`);
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '加载 GitLab 用户失败');
+    renderManualBugAssigneeList(modal, data.users || []);
+  } catch (error) {
+    list.innerHTML = `<div class="px-3 py-2 text-xs text-red-500">${escapeHtml(error.message || '加载 GitLab 用户失败')}</div>`;
+  }
+}
+
+function renderManualBugAssigneeList(modal, users = []) {
+  const list = modal.querySelector('#manual-bug-assignee-list');
+  if (!list) return;
+  if (!users.length) {
+    list.innerHTML = '<div class="px-3 py-2 text-xs text-zinc-400">没有匹配用户</div>';
+    return;
+  }
+  const selectedIds = new Set((modal.bugAssignees || []).map(user => String(user.id)));
+  list.innerHTML = users.map(user => {
+    const selected = selectedIds.has(String(user.id));
+    return `
+      <button class="manual-bug-assignee-option w-full px-3 py-2 text-left hover:bg-zinc-50 ${selected ? 'bg-zinc-50' : ''}" data-user-id="${escapeHtml(user.id)}" type="button">
+        <div class="text-sm text-zinc-700">${escapeHtml(user.name || user.username || '')}</div>
+        <div class="text-xs text-zinc-400">@${escapeHtml(user.username || '')}${selected ? ' · 已选择' : ''}</div>
+      </button>
+    `;
+  }).join('');
+  list.querySelectorAll('.manual-bug-assignee-option').forEach(button => {
+    button.addEventListener('click', () => {
+      const user = users.find(item => String(item.id) === String(button.dataset.userId));
+      if (!user) return;
+      if (!(modal.bugAssignees || []).some(item => String(item.id) === String(user.id))) {
+        modal.bugAssignees.push(user);
+      }
+      modal.querySelector('#manual-bug-assignee-search').value = '';
+      renderManualBugAssignees(modal);
+      renderManualBugAssigneeList(modal, users);
+    });
+  });
 }
 
 function readFileAsDataUrl(file) {
@@ -610,6 +703,7 @@ function readManualBugDraft(modal) {
     description: modal.querySelector('#manual-bug-description')?.value.trim() || '',
     labels: modal.querySelector('#manual-bug-labels')?.value.trim() || '',
     assigneeIds: modal.querySelector('#manual-bug-assignees')?.value.trim() || '',
+    assigneeUsernames: (modal.bugAssignees || []).map(user => user.username).filter(Boolean).join(','),
     attachments: (modal.bugAttachments || []).map(item => ({
       filename: item.filename,
       mimeType: item.mimeType,
@@ -656,7 +750,7 @@ async function enhanceManualBugIssue(modal) {
 
 async function submitManualBugIssue(modal) {
   const button = modal.querySelector('#manual-bug-submit');
-  const { title, description, labels, assigneeIds, attachments } = readManualBugDraft(modal);
+  const { title, description, labels, assigneeIds, assigneeUsernames, attachments } = readManualBugDraft(modal);
 
   if (!title || title === '[Bug]') {
     setManualBugResult(modal, '请填写 Issue 标题');
@@ -677,7 +771,7 @@ async function submitManualBugIssue(modal) {
     const response = await fetch(`${API_BASE}/gitlab/issues`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, labels, assigneeIds, attachments })
+      body: JSON.stringify({ title, description, labels, assigneeIds, assigneeUsernames, attachments })
     });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || '提交 GitLab Issue 失败');
