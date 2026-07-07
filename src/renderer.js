@@ -1,5 +1,5 @@
 // input: 同源 Web API、canvas.js、手工 Bug 草稿、GitLab 成员搜索、图片附件/粘贴截图、AI 完善请求、本地与服务端历史分析报告
-// output: 视图切换、分析流程、可指定负责人的 AI 完善提 Bug、思维导图数据、可恢复的历史分析报告展示
+// output: 视图切换、分析流程、可指定负责人的精简提 Bug 窗口、思维导图数据、可恢复的历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
@@ -447,58 +447,79 @@ async function showManualBugIssueModal() {
   modal.bugAttachments = [];
   modal.bugAssignees = parseManualBugAssigneeIds(config.assigneeIds);
   modal.id = 'manual-bug-modal';
-  modal.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm z-[240] flex items-center justify-center p-6';
+  modal.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm z-[240] flex items-center justify-center p-4 md:p-6';
   modal.innerHTML = `
-    <div class="bg-white rounded-2xl border border-zinc-100 shadow-2xl w-full max-w-4xl max-h-[88vh] overflow-hidden flex flex-col">
+    <div class="bg-white rounded-2xl border border-zinc-100 shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
       <div class="px-5 py-4 border-b border-zinc-100 flex items-center justify-between gap-4">
-        <div>
-          <h3 class="text-base font-medium text-zinc-800">提交 Bug</h3>
-          <p class="text-xs text-zinc-400 mt-1">按模板编辑后提交到当前 GitLab 项目</p>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <h3 class="text-base font-medium text-zinc-800">提交 Bug</h3>
+            <span class="px-2 py-0.5 rounded-md bg-zinc-100 text-[11px] text-zinc-500">GitLab Issue</span>
+          </div>
+          <p class="text-xs text-zinc-400 mt-1">先写现象或贴截图，AI 可补全模板，提交前仍可修改</p>
         </div>
-        <button class="manual-bug-close p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors">关闭</button>
+        <button class="manual-bug-close px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 hover:bg-zinc-50 rounded-lg transition-colors">关闭</button>
       </div>
-      <div class="flex-1 overflow-y-auto p-5 space-y-4">
-        <div>
-          <label class="block text-xs font-medium text-zinc-500 mb-1.5">简单描述</label>
-          <textarea id="manual-bug-brief" class="w-full h-24 px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 resize-y" placeholder="只写一句也可以，例如：点击采购需求后弹窗没出来，控制台没有明显报错。"></textarea>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-zinc-500 mb-1.5">图片证据</label>
-          <div class="flex flex-wrap items-center gap-2">
-            <button id="manual-bug-pick-images" class="px-3 py-2 text-sm text-zinc-600 border border-zinc-200 rounded-xl hover:bg-zinc-50 transition-colors" type="button">添加图片</button>
-            <span class="text-xs text-zinc-400">支持直接粘贴截图、报错、页面状态；AI 会读取第一张图，提交时会上传全部图片。</span>
+
+      <div class="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)]">
+        <aside class="min-h-0 overflow-y-auto border-b lg:border-b-0 lg:border-r border-zinc-100 bg-zinc-50/60 p-5 space-y-5">
+          <section>
+            <div class="flex items-center justify-between gap-3 mb-2">
+              <label class="block text-xs font-medium text-zinc-500">简单描述</label>
+              <span class="text-[11px] text-zinc-400">可只写一句</span>
+            </div>
+            <textarea id="manual-bug-brief" class="w-full h-28 px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 resize-y" placeholder="例如：点击采购需求后弹窗没出来，控制台没有明显报错。"></textarea>
+          </section>
+
+          <section>
+            <div class="flex items-center justify-between gap-3 mb-2">
+              <label class="block text-xs font-medium text-zinc-500">图片证据</label>
+              <button id="manual-bug-pick-images" class="px-2.5 py-1.5 text-xs text-zinc-600 border border-zinc-200 bg-white rounded-lg hover:bg-zinc-50 transition-colors" type="button">添加图片</button>
+            </div>
+            <p class="text-xs text-zinc-400 leading-relaxed">可直接粘贴截图。AI 读取第一张图，提交时上传全部图片。</p>
             <input id="manual-bug-images" class="hidden" type="file" accept="image/*" multiple>
-          </div>
-          <div id="manual-bug-image-list" class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3"></div>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-zinc-500 mb-1.5">标题</label>
-          <input id="manual-bug-title" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="[Bug] " placeholder="[Bug] 一句话说明哪里坏了">
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label class="block text-xs font-medium text-zinc-500 mb-1.5">Labels</label>
-            <input id="manual-bug-labels" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(config.labels || 'bug,Prism')}" placeholder="bug,Prism">
-          </div>
-          <div>
-            <label class="block text-xs font-medium text-zinc-500 mb-1.5">负责人</label>
+            <div id="manual-bug-image-list" class="mt-3 grid grid-cols-2 gap-3"></div>
+          </section>
+
+          <section>
+            <label class="block text-xs font-medium text-zinc-500 mb-2">负责人</label>
             <div id="manual-bug-assignee-selected" class="min-h-9 flex flex-wrap items-center gap-1.5 px-2 py-1.5 border border-zinc-200 rounded-xl bg-white"></div>
-            <input id="manual-bug-assignee-search" class="mt-2 w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" placeholder="搜索 GitLab 用户名或姓名">
+            <input id="manual-bug-assignee-search" class="mt-2 w-full px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" placeholder="搜索 GitLab 用户名或姓名">
             <input id="manual-bug-assignees" type="hidden" value="${escapeHtml(config.assigneeIds || '')}">
-            <div id="manual-bug-assignee-list" class="hidden mt-2 max-h-40 overflow-y-auto border border-zinc-100 rounded-xl bg-white shadow-sm"></div>
-          </div>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-zinc-500 mb-1.5">描述</label>
-          <textarea id="manual-bug-description" class="w-full h-[420px] px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 font-mono leading-6 resize-y">${escapeHtml(BUG_ISSUE_TEMPLATE)}</textarea>
-        </div>
-        <div id="manual-bug-result" class="hidden text-sm rounded-xl px-3 py-2"></div>
+            <div id="manual-bug-assignee-list" class="hidden mt-2 max-h-48 overflow-y-auto border border-zinc-100 rounded-xl bg-white shadow-sm"></div>
+          </section>
+
+          <section>
+            <label class="block text-xs font-medium text-zinc-500 mb-2">Labels</label>
+            <input id="manual-bug-labels" class="w-full px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(config.labels || 'bug,Prism')}" placeholder="bug,Prism">
+          </section>
+        </aside>
+
+        <main class="min-h-0 overflow-y-auto p-5 space-y-4">
+          <section>
+            <label class="block text-xs font-medium text-zinc-500 mb-1.5">标题</label>
+            <input id="manual-bug-title" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="[Bug] " placeholder="[Bug] 一句话说明哪里坏了">
+          </section>
+
+          <section>
+            <div class="flex items-center justify-between gap-3 mb-1.5">
+              <label class="block text-xs font-medium text-zinc-500">描述</label>
+              <span class="text-[11px] text-zinc-400">Markdown 模板，可直接编辑</span>
+            </div>
+            <textarea id="manual-bug-description" class="w-full h-[52vh] min-h-[380px] px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 font-mono leading-6 resize-y">${escapeHtml(BUG_ISSUE_TEMPLATE)}</textarea>
+          </section>
+          <div id="manual-bug-result" class="hidden text-sm rounded-xl px-3 py-2"></div>
+        </main>
       </div>
-      <div class="px-5 py-4 border-t border-zinc-100 flex items-center justify-between gap-3 bg-zinc-50">
-        <button id="manual-bug-config" class="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-lg hover:bg-white transition-colors">GitLab 配置</button>
-        <div class="flex items-center gap-2">
-          <button id="manual-bug-enhance" class="px-4 py-2 text-sm text-zinc-700 border border-zinc-200 rounded-lg hover:bg-white transition-colors">AI 完善</button>
-          <button class="manual-bug-close px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-lg hover:bg-white transition-colors">取消</button>
+
+      <div class="px-5 py-4 border-t border-zinc-100 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white">
+        <div class="flex items-center gap-2 text-xs text-zinc-400">
+          <button id="manual-bug-config" class="px-3 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-lg hover:bg-zinc-50 transition-colors">GitLab 配置</button>
+          <span class="hidden md:inline">提交前不会自动创建 Issue</span>
+        </div>
+        <div class="flex items-center justify-end gap-2">
+          <button id="manual-bug-enhance" class="px-4 py-2 text-sm text-zinc-700 border border-zinc-200 rounded-lg hover:bg-zinc-50 transition-colors">AI 完善</button>
+          <button class="manual-bug-close px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 rounded-lg hover:bg-zinc-50 transition-colors">取消</button>
           <button id="manual-bug-submit" class="px-4 py-2 text-sm font-medium text-white bg-zinc-900 hover:bg-zinc-800 rounded-lg transition-colors">提交 Issue</button>
         </div>
       </div>
