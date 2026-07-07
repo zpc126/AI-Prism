@@ -584,6 +584,14 @@ function initManualBugAssigneePicker(modal) {
   };
   input?.addEventListener('input', search);
   input?.addEventListener('focus', search);
+  modal.addEventListener('click', event => {
+    if (!event.target.closest('#manual-bug-assignee-search, #manual-bug-assignee-list, #manual-bug-assignee-selected')) {
+      hideManualBugAssigneeList(modal);
+    }
+  });
+  modal.addEventListener('keydown', event => {
+    if (event.key === 'Escape') hideManualBugAssigneeList(modal);
+  });
 }
 
 function renderManualBugAssignees(modal) {
@@ -606,6 +614,10 @@ function renderManualBugAssignees(modal) {
       renderManualBugAssignees(modal);
     });
   });
+}
+
+function hideManualBugAssigneeList(modal) {
+  modal.querySelector('#manual-bug-assignee-list')?.classList.add('hidden');
 }
 
 async function loadManualBugAssigneeUsers(modal, query = '') {
@@ -649,7 +661,7 @@ function renderManualBugAssigneeList(modal, users = []) {
       }
       modal.querySelector('#manual-bug-assignee-search').value = '';
       renderManualBugAssignees(modal);
-      renderManualBugAssigneeList(modal, users);
+      hideManualBugAssigneeList(modal);
     });
   });
 }
