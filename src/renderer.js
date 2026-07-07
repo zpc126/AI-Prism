@@ -1,5 +1,5 @@
-// input: 同源 Web API、canvas.js、手工 Bug 草稿、图片附件、AI 完善请求、本地与服务端历史分析报告
-// output: 视图切换、分析流程、支持图片的 AI 完善提 Bug、思维导图数据、可恢复的历史分析报告展示
+// input: 同源 Web API、canvas.js、手工 Bug 草稿、图片附件/粘贴截图、AI 完善请求、本地与服务端历史分析报告
+// output: 视图切换、分析流程、支持图片和粘贴截图的 AI 完善提 Bug、思维导图数据、可恢复的历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
@@ -465,7 +465,7 @@ async function showManualBugIssueModal() {
           <label class="block text-xs font-medium text-zinc-500 mb-1.5">图片证据</label>
           <div class="flex flex-wrap items-center gap-2">
             <button id="manual-bug-pick-images" class="px-3 py-2 text-sm text-zinc-600 border border-zinc-200 rounded-xl hover:bg-zinc-50 transition-colors" type="button">添加图片</button>
-            <span class="text-xs text-zinc-400">支持截图、报错、页面状态；AI 会读取第一张图，提交时会上传全部图片。</span>
+            <span class="text-xs text-zinc-400">支持直接粘贴截图、报错、页面状态；AI 会读取第一张图，提交时会上传全部图片。</span>
             <input id="manual-bug-images" class="hidden" type="file" accept="image/*" multiple>
           </div>
           <div id="manual-bug-image-list" class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3"></div>
@@ -519,6 +519,24 @@ async function showManualBugIssueModal() {
   });
   modal.querySelector('#manual-bug-enhance')?.addEventListener('click', () => enhanceManualBugIssue(modal));
   modal.querySelector('#manual-bug-submit')?.addEventListener('click', () => submitManualBugIssue(modal));
+
+  // 粘贴图片支持
+  modal.addEventListener('paste', async (event) => {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    const imageFiles = [];
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length) {
+      event.preventDefault();
+      await addManualBugImages(modal, imageFiles);
+    }
+  });
+
   modal.querySelector('#manual-bug-brief')?.focus();
 }
 

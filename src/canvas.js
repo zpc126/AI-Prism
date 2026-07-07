@@ -1,5 +1,5 @@
 // input: 思维导图数据
-// output: Canvas 类，节点渲染、交互（支持触控板双指拖拽/捏合缩放，用例状态标记）
+// output: Canvas 类，节点渲染、交互（支持触控板双指拖拽/捏合缩放、用例操作栏与状态标记）
 // position: 画布引擎，负责思维导图的布局和渲染
 
 class Canvas {
@@ -48,7 +48,6 @@ class Canvas {
     // 文字测量 canvas
     this._measureCanvas = document.createElement('canvas');
     this._measureCtx = this._measureCanvas.getContext('2d');
-    this._caseClickTimer = null;
 
     this.init();
   }
@@ -387,14 +386,10 @@ class Canvas {
       const sourceAttr = node.source ? ` title="${this.escapeHtml(node.source)}"` : '';
       el.innerHTML = `<div class="node-leaf ${status ? 'node-leaf-' + status : ''}"${sourceAttr}><span class="priority-badge priority-${priority}">${priority}</span> ${this.escapeHtml(node.title)}${statusHtml}</div>`;
       
-      // 点击用例：直接执行，右键打开操作栏
+      // 点击用例只打开操作栏，执行必须通过操作栏按钮触发，避免误触。
       el.addEventListener('click', (e) => {
         if (e.target.closest('.node-action-bar')) return;
-        if (this._caseClickTimer) clearTimeout(this._caseClickTimer);
-        this._caseClickTimer = setTimeout(() => {
-          this._caseClickTimer = null;
-          this.onRunCase?.(node);
-        }, 220);
+        this.showActionBar(el, node);
       });
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -404,10 +399,6 @@ class Canvas {
       // 双击节点：编辑
       el.addEventListener('dblclick', (e) => {
         e.preventDefault();
-        if (this._caseClickTimer) {
-          clearTimeout(this._caseClickTimer);
-          this._caseClickTimer = null;
-        }
         this.onEditCase?.(node);
       });
       
