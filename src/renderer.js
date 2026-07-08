@@ -1,8 +1,9 @@
-// input: 同源 Web API、canvas.js、手工 Bug 草稿、GitLab 成员搜索、图片附件/粘贴截图、AI 完善请求、本地与服务端历史分析报告
-// output: 视图切换、分析流程、可指定负责人的精简提 Bug 窗口、思维导图数据、可恢复的历史分析报告展示
+// input: 同源 Web API、canvas.js、手工 Bug 草稿、可复用需求版本、GitLab 成员搜索、图片附件/粘贴截图、AI 完善请求、本地与服务端历史分析报告
+// output: 视图切换、分析流程、可指定负责人并复用需求版本的精简提 Bug 窗口、思维导图数据、可恢复的历史分析报告展示
 // position: Web 前端主逻辑，连接 UI 和后端 API
 
 const API_BASE = '/api';
+const MANUAL_BUG_REQUIREMENT_VERSION_KEY = 'prism.manualBugRequirementVersion';
 
 //#region debug-point h264-webcodecs-mirror-front
 const DEBUG_H264_MIRROR_URL = 'http://127.0.0.1:7777/event';
@@ -438,8 +439,28 @@ async function getManualBugIssueDefaults() {
   }
 }
 
+function getManualBugRequirementVersionDefault() {
+  try {
+    return (localStorage.getItem(MANUAL_BUG_REQUIREMENT_VERSION_KEY) || '').trim()
+      || state.requirementVersion
+      || 'V1.0';
+  } catch {
+    return state.requirementVersion || 'V1.0';
+  }
+}
+
+function rememberManualBugRequirementVersion(value = '') {
+  const version = String(value || '').trim();
+  if (!version) return;
+  state.requirementVersion = version;
+  try {
+    localStorage.setItem(MANUAL_BUG_REQUIREMENT_VERSION_KEY, version);
+  } catch (_) {}
+}
+
 async function showManualBugIssueModal() {
   const config = await getManualBugIssueDefaults();
+  const defaultRequirementVersion = getManualBugRequirementVersionDefault();
   const existing = document.getElementById('manual-bug-modal');
   if (existing) existing.remove();
 
@@ -469,6 +490,11 @@ async function showManualBugIssueModal() {
               <span class="text-[11px] text-zinc-400">可只写一句</span>
             </div>
             <textarea id="manual-bug-brief" class="w-full h-28 px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 resize-y" placeholder="例如：点击采购需求后弹窗没出来，控制台没有明显报错。"></textarea>
+          </section>
+
+          <section>
+            <label class="block text-xs font-medium text-zinc-500 mb-2">需求版本</label>
+            <input id="manual-bug-requirement-version" class="w-full px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(defaultRequirementVersion)}" placeholder="例如：V1.0 / 2026-07-08">
           </section>
 
           <section>
@@ -732,6 +758,7 @@ function setManualBugResult(modal, message, type = 'error') {
 function readManualBugDraft(modal) {
   return {
     brief: modal.querySelector('#manual-bug-brief')?.value.trim() || '',
+    requirementVersion: modal.querySelector('#manual-bug-requirement-version')?.value.trim() || '',
     title: modal.querySelector('#manual-bug-title')?.value.trim() || '',
     description: modal.querySelector('#manual-bug-description')?.value.trim() || '',
     labels: modal.querySelector('#manual-bug-labels')?.value.trim() || '',
@@ -783,7 +810,7 @@ async function enhanceManualBugIssue(modal) {
 
 async function submitManualBugIssue(modal) {
   const button = modal.querySelector('#manual-bug-submit');
-  const { title, description, labels, assigneeIds, assigneeUsernames, attachments } = readManualBugDraft(modal);
+  const { title, description, requirementVersion, labels, assigneeIds, assigneeUsernames, attachments } = readManualBugDraft(modal);
 
   if (!title || title === '[Bug]') {
     setManualBugResult(modal, '请填写 Issue 标题');
@@ -793,6 +820,7 @@ async function submitManualBugIssue(modal) {
     setManualBugResult(modal, '请填写 Issue 描述');
     return;
   }
+  rememberManualBugRequirementVersion(requirementVersion);
 
   const originalText = button?.textContent || '提交 Issue';
   if (button) {
@@ -804,7 +832,7 @@ async function submitManualBugIssue(modal) {
     const response = await fetch(`${API_BASE}/gitlab/issues`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, labels, assigneeIds, assigneeUsernames, attachments })
+      body: JSON.stringify({ title, description, requirementVersion, labels, assigneeIds, assigneeUsernames, attachments })
     });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || '提交 GitLab Issue 失败');
