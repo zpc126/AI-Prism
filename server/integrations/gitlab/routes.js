@@ -1,5 +1,5 @@
 // input: GitLab 配置、报告失败结果、手工 Bug 草稿、需求版本、项目成员查询、图片附件与 AI 完善请求
-// output: GitLab Issue 配置、草稿、报告 Issue、项目成员、带需求版本的手工 Bug 提交、图片附件上传与 AI 完善 API
+// output: GitLab Issue 配置、草稿、报告 Issue、项目成员、带去重需求版本的手工 Bug 提交、图片附件上传与 AI 完善 API
 // position: GitLab Issue 集成路由
 
 const express = require('express');
@@ -144,11 +144,18 @@ function appendAttachmentNotes(description, uploaded = [], failed = []) {
   return `${description || ''}\n\n${sections.join('\n\n')}`;
 }
 
+function removeRequirementVersionSections(description = '') {
+  return String(description || '')
+    .replace(/(^|\n)##\s*需求版本[^\n]*\n[\s\S]*?(?=\n##\s+|$)/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function ensureRequirementVersionSection(description = '', requirementVersion = '') {
   const version = String(requirementVersion || '').trim();
-  const text = String(description || '').trim();
-  if (!version || /^##\s*需求版本\b/m.test(text)) return text;
-  const marker = '\n## 当前行为';
+  const text = removeRequirementVersionSections(description);
+  if (!version) return text;
+  const marker = '\n## 摘要';
   if (text.includes(marker)) {
     return text.replace(marker, `\n## 需求版本\n${version}\n${marker}`);
   }
@@ -230,7 +237,7 @@ async function enhanceManualBugDraft(input = {}) {
   const systemPrompt = [
     '你是资深 QA，负责把用户很粗略的 Bug 描述整理成可提交 GitLab Issue 的中文 Markdown。',
     '必须严格保留用户模板的标题层级：# Bug、摘要、当前行为、期望行为、复现步骤、影响范围、证据、父 case / epic、验证信号。',
-    '如果用户提供了需求版本，必须在 Markdown 中包含“## 需求版本”小节。',
+    '如果用户提供了需求版本，只能包含一个“## 需求版本”小节，不要重复。',
     '不要编造项目名、用户、日志、trace ID、父 case、真实接口响应；不确定的内容写“待确认”。',
     '如果用户提供了图片，请把图片中能确认的界面、报错、字段、按钮、状态写进当前行为、复现步骤或证据里。',
     '复现步骤要尽量可执行；影响范围表格必须保留；输出必须是 JSON，不要输出解释文字。',
