@@ -1,6 +1,6 @@
-// input: 自动化脚本 API、用户编辑操作
-// output: 脚本工作台、JSON 编辑、保存和执行
-// position: 自动化脚本库前端模块
+// input: 自动化脚本 API、用户编辑、脚本包导出和 GitLab 发布操作
+// output: 脚本工作台、locator 元数据保留、JSON 编辑、保存、执行、导出和 GitLab 提交
+// position: 自动化脚本库前端模块，维护可回放脚本 DSL
 
 const scriptWorkspaceState = {
   scripts: [],
@@ -20,6 +20,7 @@ const SCRIPT_ACTIONS = [
   { value: 'wait', label: '等待元素', tone: 'slate', target: 'CSS 选择器', valueLabel: '超时毫秒数' },
   { value: 'scroll', label: '滚动画布', tone: 'cyan', target: 'down 或 up', valueLabel: '滚动距离' },
   { value: 'assert_text', label: '验证文本', tone: 'green', target: '页面应出现的文字', valueLabel: '无需填写' },
+  { value: 'screenshot', label: '截图', tone: 'slate', target: '截图标签', valueLabel: '无需填写' },
 ];
 
 async function openScriptWorkspace() {
@@ -42,10 +43,14 @@ async function openScriptWorkspace() {
             <h2>自动化脚本库</h2>
             <span class="script-workspace-count">0 个脚本</span>
           </div>
-          <p>成功路径直接回放，页面变化时再交给 Agent 自愈</p>
+          <p>成功路径直接回放，脚本失效时再按需修复</p>
         </div>
       </div>
-      <div class="script-workspace-summary"></div>
+      <div class="script-workspace-headtools">
+        <div class="script-workspace-summary"></div>
+        <button class="script-workspace-publish" type="button">提交 GitLab</button>
+        <button class="script-workspace-export" type="button">导出脚本包</button>
+      </div>
     </header>
     <div class="script-workspace-body">
       <aside class="script-workspace-sidebar">
@@ -68,6 +73,12 @@ async function openScriptWorkspace() {
   document.body.appendChild(modal);
 
   modal.querySelector('.script-workspace-close').onclick = () => modal.remove();
+  modal.querySelector('.script-workspace-export').onclick = () => {
+    exportScriptPackage().catch(error => showScriptToast(error.message, 'error'));
+  };
+  modal.querySelector('.script-workspace-publish').onclick = () => {
+    showGitLabPublishModal();
+  };
   modal.querySelector('.script-workspace-search').oninput = event => {
     scriptWorkspaceState.search = event.target.value.trim().toLowerCase();
     renderScriptWorkspaceSidebar();
@@ -221,6 +232,7 @@ function renderScriptWorkspaceEditor() {
         <div class="script-editor-actions">
           <button class="script-button danger delete-workspace-script">删除</button>
           <button class="script-button secondary save-workspace-script">保存</button>
+          <button class="script-button publish publish-workspace-script">提交脚本</button>
           <button class="script-button primary run-workspace-script">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
             执行测试
@@ -256,8 +268,8 @@ function renderScriptWorkspaceEditor() {
         </div>
         <div class="script-editor-modehint">
           ${scriptWorkspaceState.mode === 'visual'
-            ? '动作按顺序执行，可使用上下按钮调整'
-            : '只接受脚本 JSON，不执行任意 JavaScript'}
+            ? '动作按顺序执行，隐藏的定位器会随脚本保存'
+            : '只接受脚本 JSON，可查看和调整 locator 候选'}
         </div>
       </div>
 
@@ -291,7 +303,7 @@ function renderVisualScriptEditor(draft) {
 
 function renderWorkspaceStep(step, index, total) {
   const config = SCRIPT_ACTIONS.find(item => item.value === step.action) || SCRIPT_ACTIONS[1];
-  const valueDisabled = ['switch_device', 'navigate', 'click', 'assert_text'].includes(step.action);
+  const valueDisabled = ['switch_device', 'navigate', 'click', 'assert_text', 'screenshot'].includes(step.action);
   return `
     <div class="script-action-card tone-${config.tone}" data-step-index="${index}">
       <div class="script-action-order">
@@ -343,7 +355,7 @@ function renderJsonScriptEditor(draft) {
         <textarea class="script-json-editor" spellcheck="false" aria-label="脚本 JSON">${escapeHtml(JSON.stringify(draftToCode(draft), null, 2))}</textarea>
       </div>
       <div class="script-code-help">
-        支持动作：switch_device、navigate、click、fill、wait、scroll、assert_text。按 <kbd>⌘ S</kbd> 保存。
+        支持动作：switch_device、navigate、click、fill、wait、scroll、assert_text、screenshot；locator 字段用于 Playwright 直接回放。
       </div>
     </div>`;
 }
@@ -367,6 +379,19 @@ function bindScriptWorkspaceEditor(script) {
 
   editor.querySelector('.save-workspace-script').onclick = () => {
     saveWorkspaceScript().catch(error => showScriptToast(error.message, 'error'));
+  };
+  editor.querySelector('.publish-workspace-script').onclick = async () => {
+    const button = editor.querySelector('.publish-workspace-script');
+    button.disabled = true;
+    button.textContent = '保存中...';
+    try {
+      await saveWorkspaceScript();
+      showGitLabPublishModal();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = '提交脚本';
+      showScriptToast(error.message, 'error');
+    }
   };
   editor.querySelector('.run-workspace-script').onclick = async () => {
     try {
@@ -484,11 +509,20 @@ function captureWorkspaceDraft() {
   scriptWorkspaceState.draft.moduleName = editor.querySelector('#workspace-script-module')?.value.trim() || '';
   scriptWorkspaceState.draft.expected = editor.querySelector('#workspace-script-expected')?.value.trim() || '';
   scriptWorkspaceState.draft.enabled = Boolean(editor.querySelector('#workspace-script-enabled')?.checked);
-  scriptWorkspaceState.draft.steps = [...editor.querySelectorAll('.script-action-card')].map(card => ({
-    action: card.querySelector('.workspace-step-action').value,
-    target: card.querySelector('.workspace-step-target').value.trim(),
-    value: card.querySelector('.workspace-step-value').value,
-  }));
+  scriptWorkspaceState.draft.steps = [...editor.querySelectorAll('.script-action-card')].map(card => {
+    const index = Number(card.dataset.stepIndex);
+    const previous = scriptWorkspaceState.draft.steps[index] || {};
+    const action = card.querySelector('.workspace-step-action').value;
+    const target = card.querySelector('.workspace-step-target').value.trim();
+    const value = card.querySelector('.workspace-step-value').value;
+    const next = { action, target, value };
+    if (previous.action === action && previous.target === target) {
+      ['locator', 'locatorCandidates', 'pageGuard', 'postCheck', 'schemaVersion', 'device'].forEach(key => {
+        if (previous[key] !== undefined) next[key] = previous[key];
+      });
+    }
+    return next;
+  });
   return true;
 }
 
@@ -497,7 +531,7 @@ async function saveWorkspaceScript() {
   const draft = scriptWorkspaceState.draft;
   if (!draft?.name) throw new Error('脚本名称不能为空');
   if (!draft.steps.length) throw new Error('至少需要一个执行动作');
-  if (draft.steps.some(step => !step.target && step.action !== 'scroll')) {
+  if (draft.steps.some(step => !step.target && !['scroll', 'screenshot'].includes(step.action))) {
     throw new Error('动作目标不能为空');
   }
 
@@ -508,7 +542,10 @@ async function saveWorkspaceScript() {
       name: draft.name,
       productName: draft.productName,
       moduleName: draft.moduleName,
+      schemaVersion: draft.schemaVersion || 2,
+      pageGuard: draft.pageGuard || {},
       expected: draft.expected,
+      postCheck: draft.postCheck || {},
       enabled: draft.enabled,
       steps: draft.steps,
     }),
@@ -600,15 +637,156 @@ async function refreshScriptWorkspace() {
   renderScriptWorkspace();
 }
 
+async function exportScriptPackage() {
+  const response = await fetch(`${API_BASE}/scripts/export`);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || '导出失败');
+  if (!Array.isArray(payload.scripts) || payload.scripts.length === 0) {
+    throw new Error('暂无最近执行通过的启用脚本可导出');
+  }
+
+  const filename = `scout-script-package-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+  showScriptToast(`已导出 ${payload.scripts.length} 个脚本`);
+}
+
+async function loadGitLabPublishConfig() {
+  const fallback = {
+    baseUrl: 'http://gitlab.data-match.net:8929',
+    projectPath: 'supply-chain/dm-supply-next',
+    branch: 'main',
+    hasToken: false,
+    scriptPackagePath: 'tests/scout/scripts/scout-script-package.json',
+    suitePath: 'tests/scout/suites/smoke.json',
+  };
+  try {
+    const response = await fetch(`${API_BASE}/scripts/gitlab-config`);
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '读取 GitLab 配置失败');
+    return { ...fallback, ...(data.config || {}) };
+  } catch (error) {
+    return { ...fallback, error: error.message };
+  }
+}
+
+function applyGitLabPublishConfig(modal, config) {
+  modal.querySelector('.gitlab-base-url').value = config.baseUrl || '';
+  modal.querySelector('.gitlab-project-path').value = config.projectPath || '';
+  modal.querySelector('.gitlab-branch').value = config.branch || 'main';
+  modal.querySelector('.gitlab-file-path').value = config.scriptPackagePath || 'tests/scout/scripts/scout-script-package.json';
+  modal.querySelector('.gitlab-suite-path').value = config.suitePath || 'tests/scout/suites/smoke.json';
+  const tokenInput = modal.querySelector('.gitlab-token');
+  tokenInput.placeholder = config.hasToken
+    ? '已使用服务端 GitLab Token，可留空'
+    : '未配置服务端 token，可在此临时填写';
+  const note = modal.querySelector('.script-gitlab-config-note');
+  if (config.error) {
+    note.textContent = `未读取到系统配置：${config.error}`;
+    note.classList.add('warning');
+    return;
+  }
+  note.textContent = config.hasToken
+    ? '已读取系统 GitLab 配置；token 由服务端持有，不会展示在页面上。'
+    : '已读取系统 GitLab 地址；未配置 token 时，本次提交需要临时填写。';
+  note.classList.remove('warning');
+}
+
+function showGitLabPublishModal() {
+  document.querySelector('.script-gitlab-modal')?.remove();
+  const modal = document.createElement('div');
+  modal.className = 'script-gitlab-modal';
+  modal.innerHTML = `
+    <div class="script-gitlab-panel">
+      <div class="script-gitlab-header">
+        <div>
+          <h3>提交到 GitLab</h3>
+          <p>提交稳定脚本包到 dm-supply-next，可使用系统配置或本次覆盖</p>
+        </div>
+        <button class="script-gitlab-close" type="button">关闭</button>
+      </div>
+      <div class="script-gitlab-body">
+        <label><span>GitLab 地址</span><input class="gitlab-base-url" value="http://gitlab.data-match.net:8929"></label>
+        <label><span>项目路径</span><input class="gitlab-project-path" value="supply-chain/dm-supply-next"></label>
+        <div class="script-gitlab-grid">
+          <label><span>分支</span><input class="gitlab-branch" value="main"></label>
+          <label><span>GitLab Token</span><input class="gitlab-token" type="password" placeholder="可留空使用服务端 GITLAB_TOKEN"></label>
+        </div>
+        <label><span>脚本包路径</span><input class="gitlab-file-path" value="tests/scout/scripts/scout-script-package.json"></label>
+        <label><span>Suite 路径</span><input class="gitlab-suite-path" value="tests/scout/suites/smoke.json"></label>
+        <label><span>提交信息</span><input class="gitlab-commit-message" value="chore: update Scout automation scripts"></label>
+        <label class="script-gitlab-check">
+          <input class="gitlab-update-suite" type="checkbox" checked>
+          <span>同步把脚本包路径写入 smoke suite</span>
+        </label>
+        <p class="script-gitlab-config-note">正在读取系统 GitLab 配置...</p>
+      </div>
+      <div class="script-gitlab-footer">
+        <button class="script-button secondary script-gitlab-cancel" type="button">取消</button>
+        <button class="script-button primary script-gitlab-submit" type="button">提交</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  modal.querySelector('.script-gitlab-close').onclick = close;
+  modal.querySelector('.script-gitlab-cancel').onclick = close;
+  loadGitLabPublishConfig().then(config => {
+    if (document.body.contains(modal)) applyGitLabPublishConfig(modal, config);
+  });
+  modal.addEventListener('click', event => {
+    if (event.target === modal) close();
+  });
+  modal.querySelector('.script-gitlab-submit').onclick = async () => {
+    const button = modal.querySelector('.script-gitlab-submit');
+    button.disabled = true;
+    button.textContent = '提交中...';
+    try {
+      const response = await fetch(`${API_BASE}/scripts/publish-gitlab`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gitlabBaseUrl: modal.querySelector('.gitlab-base-url').value.trim(),
+          projectPath: modal.querySelector('.gitlab-project-path').value.trim(),
+          branch: modal.querySelector('.gitlab-branch').value.trim(),
+          token: modal.querySelector('.gitlab-token').value.trim(),
+          filePath: modal.querySelector('.gitlab-file-path').value.trim(),
+          suitePath: modal.querySelector('.gitlab-suite-path').value.trim(),
+          commitMessage: modal.querySelector('.gitlab-commit-message').value.trim(),
+          updateSuite: modal.querySelector('.gitlab-update-suite').checked,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '提交失败');
+      close();
+      showScriptToast(`已提交 ${data.scriptCount} 个脚本到 GitLab`);
+      if (data.commit?.webUrl) window.open(data.commit.webUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = '提交';
+      showScriptToast(error.message, 'error');
+    }
+  };
+}
+
 function createScriptDraft(script) {
   return {
     id: script.id,
     name: script.name || '',
     productName: script.product_name || '',
     moduleName: script.module_name || '',
+    schemaVersion: script.schemaVersion || 2,
+    pageGuard: script.pageGuard || {},
     expected: script.expected || '',
+    postCheck: script.postCheck || {},
     enabled: Boolean(script.enabled),
     steps: (script.steps || []).map(step => ({
+      ...step,
       action: step.action || 'click',
       target: step.target || '',
       value: step.value || '',
@@ -621,7 +799,10 @@ function draftToCode(draft) {
     name: draft.name,
     productName: draft.productName,
     moduleName: draft.moduleName,
+    schemaVersion: draft.schemaVersion || 2,
+    pageGuard: draft.pageGuard || {},
     expected: draft.expected,
+    postCheck: draft.postCheck || {},
     enabled: draft.enabled,
     steps: draft.steps,
   };
@@ -633,9 +814,13 @@ function codeToDraft(value, id) {
     name: String(value.name || ''),
     productName: String(value.productName || ''),
     moduleName: String(value.moduleName || ''),
+    schemaVersion: Number(value.schemaVersion || 2),
+    pageGuard: value.pageGuard && typeof value.pageGuard === 'object' && !Array.isArray(value.pageGuard) ? value.pageGuard : {},
     expected: String(value.expected || ''),
+    postCheck: value.postCheck && typeof value.postCheck === 'object' && !Array.isArray(value.postCheck) ? value.postCheck : {},
     enabled: value.enabled !== false,
     steps: value.steps.map(step => ({
+      ...step,
       action: String(step.action || ''),
       target: String(step.target || ''),
       value: step.value === undefined ? '' : String(step.value),

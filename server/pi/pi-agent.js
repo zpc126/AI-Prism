@@ -1,6 +1,6 @@
-// input: PI SDK, Prism 工具
-// output: PI Agent 会话，支持规划、工具使用、推理
-// position: PI Agent 服务，连接 Prism 和 PI
+// input: PI SDK、模型配置、可选系统提示词与自定义工具
+// output: 可复用 PI Agent 会话，支持规划、工具使用与专项测试模式
+// position: PI Agent 服务，连接 Prism 执行器、探索测试和 PI
 
 let createAgentSession, SessionManager, AuthStorage, ModelRegistry, DefaultResourceLoader;
 const { browserTool } = require('./tools/browser');
@@ -89,6 +89,9 @@ class PIAgent {
     this.session = null;
     this.onEvent = options.onEvent || (() => {});
     this.cwd = options.cwd || process.cwd();
+    this.systemPrompt = options.systemPrompt || '';
+    this.tools = options.tools || null;
+    this.customTools = options.customTools || null;
   }
 
   async init() {
@@ -107,9 +110,9 @@ class PIAgent {
       authStorage,
       modelRegistry,
       model: model || undefined,
-      tools: ['browser', 'database', 'api'],
-      customTools: [browserTool, databaseTool, apiTool],
-      systemPrompt: `你是一个资深测试工程师，正在执行测试任务。
+      tools: this.tools || ['browser', 'database', 'api'],
+      customTools: this.customTools || [browserTool, databaseTool, apiTool],
+      systemPrompt: this.systemPrompt || `你是一个资深测试工程师，正在执行测试任务。
 
 ## 你的工作方式
 

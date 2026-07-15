@@ -1,6 +1,6 @@
-// input: dotenv、express、业务路由、Web 静态资源、图片 base64 请求、分析报告分享与历史查询请求
-// output: Prism Web 页面、HTTP API、WebSocket 服务、分析报告分享页与历史列表
-// position: Web 应用服务入口，支持文档、图片需求分析与报告分享
+// input: dotenv、express、业务路由、Web 静态资源、探索测试、图片 base64 请求与分析报告请求
+// output: Prism Web 页面、HTTP API、WebSocket 服务、AI 探索 SSE、分享页与历史列表
+// position: Web 应用服务入口，统一挂载需求、执行、探索、GitLab 和报告能力
 
 require('dotenv').config();
 
@@ -39,6 +39,7 @@ let parserRoutes;
 let evalRoutes;
 let deviceRoutes;
 let gitlabRoutes;
+let explorationRoutes;
 
 try {
   brainRoutes = require('./brain/routes');
@@ -101,6 +102,13 @@ try {
 } catch (e) {
   console.error('GitLab 路由加载失败:', e.message);
   gitlabRoutes = express.Router();
+}
+
+try {
+  explorationRoutes = require('./exploration/routes');
+} catch (e) {
+  console.error('AI 探索路由加载失败:', e.message);
+  explorationRoutes = express.Router();
 }
 
 let piRoutes;
@@ -346,6 +354,9 @@ app.use('/api/device', deviceRoutes);
 
 // GitLab Issue 集成
 app.use('/api/gitlab', gitlabRoutes);
+
+// Web AI 探索测试
+app.use('/api/exploration', explorationRoutes);
 
 // PI Agent 路由
 app.use('/api/pi', piRoutes);

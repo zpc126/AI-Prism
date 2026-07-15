@@ -1,13 +1,24 @@
 // input: Web 配置文件路径、环境变量
-// output: 当前激活的 LLM 提供商配置
+// output: 当前激活的 LLM 提供商配置和 GitLab 发布配置
 // position: 服务器端 Web-only 配置中心
 
 const fs = require('fs');
 const path = require('path');
 
+const DEFAULT_GITLAB_CONFIG = {
+  baseUrl: 'http://gitlab.data-match.net:8929',
+  projectPath: 'supply-chain/dm-supply-next',
+  projectUrl: '',
+  branch: 'main',
+  token: '',
+  scriptPackagePath: 'tests/scout/scripts/scout-script-package.json',
+  suitePath: 'tests/scout/suites/smoke.json'
+};
+
 const defaultConfig = {
   provider: 'openai',
   activeModelId: 'model-openai-default',
+  gitlab: DEFAULT_GITLAB_CONFIG,
   models: [
     {
       id: 'model-openai-default',
@@ -189,6 +200,72 @@ function loadConfig() {
   return normalizeConfig(loadWebConfig() || {});
 }
 
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const normalized = String(value || '').trim();
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function getGitLabBaseUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
+}
+
+function getGitLabProjectPath(projectUrl) {
+  const raw = String(projectUrl || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).pathname.replace(/^\/+/, '').replace(/\.git$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function getGitLabConfig() {
+  const savedGitLab = loadConfig().gitlab || {};
+  const projectUrl = firstNonEmpty(process.env.GITLAB_PROJECT_URL, savedGitLab.projectUrl);
+  const baseUrl = getGitLabBaseUrl(firstNonEmpty(
+    process.env.GITLAB_BASE_URL,
+    projectUrl,
+    savedGitLab.baseUrl,
+    DEFAULT_GITLAB_CONFIG.baseUrl
+  ));
+  const projectPath = firstNonEmpty(
+    process.env.GITLAB_PROJECT_PATH,
+    getGitLabProjectPath(projectUrl),
+    savedGitLab.projectPath,
+    DEFAULT_GITLAB_CONFIG.projectPath
+  );
+  const token = firstNonEmpty(process.env.GITLAB_TOKEN, savedGitLab.token);
+
+  return {
+    baseUrl,
+    projectPath,
+    projectUrl,
+    branch: firstNonEmpty(process.env.GITLAB_BRANCH, savedGitLab.branch, DEFAULT_GITLAB_CONFIG.branch),
+    token,
+    hasToken: Boolean(token),
+    scriptPackagePath: firstNonEmpty(
+      process.env.GITLAB_SCRIPT_PACKAGE_PATH,
+      savedGitLab.scriptPackagePath,
+      DEFAULT_GITLAB_CONFIG.scriptPackagePath
+    ),
+    suitePath: firstNonEmpty(
+      process.env.GITLAB_SUITE_PATH,
+      savedGitLab.suitePath,
+      DEFAULT_GITLAB_CONFIG.suitePath
+    )
+  };
+}
+
 // 获取当前激活的 LLM 配置
 function getLLMConfig() {
   const savedConfig = loadConfig();
@@ -265,7 +342,9 @@ function getLLMConfig() {
 }
 
 module.exports = {
+  DEFAULT_GITLAB_CONFIG,
   defaultConfig,
+  getGitLabConfig,
   getLLMConfig,
   loadConfig,
   loadWebConfig,

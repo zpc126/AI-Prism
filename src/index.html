@@ -1,6 +1,6 @@
-<!-- input: 用户需求、配置、GitLab 负责人、可复用需求版本、手工 Bug 草稿、图片附件/粘贴截图、AI 完善请求和自动化执行入口 -->
-<!-- output: Prism 主界面、画布、报告、大脑入口、带可复用需求版本的精简提 Bug 工作台与防误触用例操作入口 -->
-<!-- position: 前端主页面结构 -->
+<!-- input: 用户需求、Web 探索配置、GitLab 负责人、手工 Bug 草稿、图片证据和自动化执行入口 -->
+<!-- output: Prism 主界面、AI 探索入口、画布、报告、可编辑提 Bug 工作台与防误触用例操作入口 -->
+<!-- position: 前端主页面结构，承载核心工作台入口与全局模态框 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -32,6 +32,14 @@
 	            <path d="M5 5.5h6M5 8h6M5 10.5h3"/>
 	          </svg>
 	          <span>GitLab</span>
+	        </button>
+
+	        <button id="btn-ai-exploration" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors" type="button">
+	          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+	            <circle cx="8" cy="8" r="5.5"/>
+	            <path d="M10.7 5.3 9.2 9.2 5.3 10.7 6.8 6.8l3.9-1.5Z"/>
+	          </svg>
+	          <span>探索测试</span>
 	        </button>
 
 	        <button id="btn-submit-bug" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-700 border border-transparent hover:border-zinc-200 rounded-md transition-colors">
@@ -1053,7 +1061,8 @@
 	  </div>
 
 		  <script src="canvas.js?v=20260708-bug-version"></script>
-	  <script src="renderer.js?v=20260708-bug-version"></script>
+	  <script src="renderer.js?v=20260710-exploration"></script>
+	  <script src="exploration.js?v=20260710-exploration"></script>
 	  <script src="script-library.js?v=20260708-bug-version"></script>
 	  <script src="brain.js?v=20260708-bug-version"></script>
 	  <script src="eval.js?v=20260708-bug-version"></script>

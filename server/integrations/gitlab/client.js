@@ -1,5 +1,5 @@
-// input: GitLab 配置、Issue 草稿、项目成员查询条件
-// output: GitLab API 调用结果、Issue 创建结果与项目成员列表
+// input: GitLab 配置、Issue 草稿、项目成员与里程碑查询条件
+// output: GitLab API 调用结果、Issue 创建结果、项目成员与里程碑列表
 // position: GitLab REST API 客户端
 
 const fetch = require('node-fetch');
@@ -80,6 +80,22 @@ async function listProjectMembers(config, query = '') {
   }));
 }
 
+async function listProjectMilestones(config, state = 'active') {
+  const params = new URLSearchParams({ per_page: '100' });
+  if (state) params.set('state', state);
+  const milestones = await gitlabRequest(config, `/api/v4/projects/${getProjectRef(config.projectId)}/milestones?${params.toString()}`);
+  return (Array.isArray(milestones) ? milestones : []).map(milestone => ({
+    id: milestone.id,
+    iid: milestone.iid,
+    title: milestone.title,
+    description: milestone.description,
+    state: milestone.state,
+    start_date: milestone.start_date,
+    due_date: milestone.due_date,
+    web_url: milestone.web_url,
+  }));
+}
+
 async function resolveAssigneeIds(config, draft) {
   const ids = parseNumberList(draft.assigneeIds || config.assigneeIds);
   const usernames = parseList(draft.assigneeUsernames);
@@ -100,8 +116,10 @@ async function createIssue(config, draft) {
   };
   const labels = parseList(draft.labels || config.labels);
   const assigneeIds = await resolveAssigneeIds(config, draft);
+  const milestoneId = Number(draft.milestoneId);
   if (labels.length) payload.labels = labels.join(',');
   if (assigneeIds.length) payload.assignee_ids = assigneeIds;
+  if (Number.isInteger(milestoneId) && milestoneId > 0) payload.milestone_id = milestoneId;
 
   return gitlabRequest(config, `/api/v4/projects/${getProjectRef(config.projectId)}/issues`, {
     method: 'POST',
@@ -149,6 +167,7 @@ async function uploadProjectFile(config, filePath, filename) {
 module.exports = {
   createIssue,
   listProjectMembers,
+  listProjectMilestones,
   parseList,
   testConnection,
   uploadProjectFile,

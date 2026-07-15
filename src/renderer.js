@@ -1,6 +1,6 @@
-// input: 同源 Web API、canvas.js、手工 Bug 草稿、可复用需求版本、GitLab 成员搜索、图片附件/粘贴截图、AI 完善请求、本地与服务端历史分析报告
-// output: 视图切换、分析流程、可指定负责人并复用需求版本的精简提 Bug 窗口、思维导图数据、可恢复的历史分析报告展示
-// position: Web 前端主逻辑，连接 UI 和后端 API
+// input: 同源 Web API、canvas.js、手工/探索 Bug 草稿、GitLab 成员/里程碑、图片证据、AI 完善请求与历史分析报告
+// output: 视图切换、分析流程、可选择 GitLab 里程碑的提 Bug 窗口、思维导图数据和历史报告展示
+// position: Web 前端主逻辑，连接 UI、探索测试、GitLab 和后端 API
 
 const API_BASE = '/api';
 const MANUAL_BUG_REQUIREMENT_VERSION_KEY = 'prism.manualBugRequirementVersion';
@@ -458,9 +458,9 @@ function rememberManualBugRequirementVersion(value = '') {
   } catch (_) {}
 }
 
-async function showManualBugIssueModal() {
+async function showManualBugIssueModal(initialDraft = {}) {
   const config = await getManualBugIssueDefaults();
-  const defaultRequirementVersion = getManualBugRequirementVersionDefault();
+  const defaultRequirementVersion = initialDraft.requirementVersion || getManualBugRequirementVersionDefault();
   const existing = document.getElementById('manual-bug-modal');
   if (existing) existing.remove();
 
@@ -489,12 +489,15 @@ async function showManualBugIssueModal() {
               <label class="block text-xs font-medium text-zinc-500">简单描述</label>
               <span class="text-[11px] text-zinc-400">可只写一句</span>
             </div>
-            <textarea id="manual-bug-brief" class="w-full h-28 px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 resize-y" placeholder="例如：点击采购需求后弹窗没出来，控制台没有明显报错。"></textarea>
+            <textarea id="manual-bug-brief" class="w-full h-28 px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 resize-y" placeholder="例如：点击采购需求后弹窗没出来，控制台没有明显报错。">${escapeHtml(initialDraft.brief || '')}</textarea>
           </section>
 
           <section>
             <label class="block text-xs font-medium text-zinc-500 mb-2">需求版本</label>
-            <input id="manual-bug-requirement-version" class="w-full px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(defaultRequirementVersion)}" placeholder="例如：V1.0 / 2026-07-08">
+            <select id="manual-bug-milestone" class="w-full px-3 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" disabled>
+              <option value="">正在加载 GitLab 里程碑...</option>
+            </select>
+            <p id="manual-bug-milestone-hint" class="mt-1.5 text-[11px] text-zinc-400">提交后记录在 GitLab 里程碑字段</p>
           </section>
 
           <section>
@@ -524,7 +527,7 @@ async function showManualBugIssueModal() {
         <main class="min-h-0 overflow-y-auto p-5 space-y-4">
           <section>
             <label class="block text-xs font-medium text-zinc-500 mb-1.5">标题</label>
-            <input id="manual-bug-title" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="[Bug] " placeholder="[Bug] 一句话说明哪里坏了">
+            <input id="manual-bug-title" class="w-full px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400" value="${escapeHtml(initialDraft.title || '[Bug] ')}" placeholder="[Bug] 一句话说明哪里坏了">
           </section>
 
           <section>
@@ -532,7 +535,7 @@ async function showManualBugIssueModal() {
               <label class="block text-xs font-medium text-zinc-500">描述</label>
               <span class="text-[11px] text-zinc-400">Markdown 模板，可直接编辑</span>
             </div>
-            <textarea id="manual-bug-description" class="w-full h-[52vh] min-h-[380px] px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 font-mono leading-6 resize-y">${escapeHtml(BUG_ISSUE_TEMPLATE)}</textarea>
+            <textarea id="manual-bug-description" class="w-full h-[52vh] min-h-[380px] px-3 py-2 text-sm border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-400 font-mono leading-6 resize-y">${escapeHtml(initialDraft.description || BUG_ISSUE_TEMPLATE)}</textarea>
           </section>
           <div id="manual-bug-result" class="hidden text-sm rounded-xl px-3 py-2"></div>
         </main>
@@ -569,8 +572,10 @@ async function showManualBugIssueModal() {
     event.target.value = '';
   });
   initManualBugAssigneePicker(modal);
+  loadManualBugMilestones(modal, defaultRequirementVersion);
   modal.querySelector('#manual-bug-enhance')?.addEventListener('click', () => enhanceManualBugIssue(modal));
   modal.querySelector('#manual-bug-submit')?.addEventListener('click', () => submitManualBugIssue(modal));
+  loadManualBugEvidenceUrls(modal, initialDraft.evidenceUrls || []);
 
   // 粘贴图片支持
   modal.addEventListener('paste', async (event) => {
@@ -592,12 +597,59 @@ async function showManualBugIssueModal() {
   modal.querySelector('#manual-bug-brief')?.focus();
 }
 
+window.showManualBugIssueModal = showManualBugIssueModal;
+
+async function loadManualBugEvidenceUrls(modal, evidenceUrls = []) {
+  const items = Array.isArray(evidenceUrls) ? evidenceUrls.slice(0, 6) : [];
+  if (!items.length) return;
+  for (const [index, item] of items.entries()) {
+    try {
+      const url = typeof item === 'string' ? item : item.url;
+      if (!url) continue;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const filename = (typeof item === 'object' && item.filename) || `exploration-evidence-${index + 1}.png`;
+      const file = new File([blob], filename, { type: blob.type || 'image/png' });
+      await addManualBugImages(modal, [file]);
+    } catch (error) {
+      setManualBugResult(modal, `探索截图读取失败：${error.message || '未知错误'}`);
+    }
+  }
+}
+
 function parseManualBugAssigneeIds(value = '') {
   return String(value || '')
     .split(',')
     .map(item => Number(item.trim()))
     .filter(number => Number.isInteger(number) && number > 0)
     .map(id => ({ id, username: '', name: `ID ${id}` }));
+}
+
+async function loadManualBugMilestones(modal, preferredTitle = '') {
+  const select = modal.querySelector('#manual-bug-milestone');
+  const hint = modal.querySelector('#manual-bug-milestone-hint');
+  if (!select) return;
+  try {
+    const response = await fetch(`${API_BASE}/gitlab/milestones`);
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '加载 GitLab 里程碑失败');
+    const milestones = Array.isArray(data.milestones) ? data.milestones : [];
+    select.innerHTML = '<option value="">不设置里程碑</option>' + milestones.map(milestone => `
+      <option value="${escapeHtml(milestone.id)}" data-title="${escapeHtml(milestone.title || '')}">${escapeHtml(milestone.title || `里程碑 ${milestone.id}`)}</option>
+    `).join('');
+    const preferred = String(preferredTitle || '').trim();
+    const matched = milestones.find(milestone => String(milestone.title || '').trim() === preferred);
+    if (matched) select.value = String(matched.id);
+    select.disabled = false;
+    if (hint) hint.textContent = milestones.length
+      ? '提交后记录在 GitLab 里程碑字段'
+      : '当前项目没有活跃里程碑';
+  } catch (error) {
+    select.innerHTML = '<option value="">里程碑加载失败</option>';
+    select.disabled = true;
+    if (hint) hint.textContent = error.message || '加载 GitLab 里程碑失败';
+  }
 }
 
 function initManualBugAssigneePicker(modal) {
@@ -756,9 +808,12 @@ function setManualBugResult(modal, message, type = 'error') {
 }
 
 function readManualBugDraft(modal) {
+  const milestoneSelect = modal.querySelector('#manual-bug-milestone');
+  const selectedMilestone = milestoneSelect?.selectedOptions?.[0];
   return {
     brief: modal.querySelector('#manual-bug-brief')?.value.trim() || '',
-    requirementVersion: modal.querySelector('#manual-bug-requirement-version')?.value.trim() || '',
+    requirementVersion: selectedMilestone?.dataset?.title || '',
+    milestoneId: milestoneSelect?.value || '',
     title: modal.querySelector('#manual-bug-title')?.value.trim() || '',
     description: modal.querySelector('#manual-bug-description')?.value.trim() || '',
     labels: modal.querySelector('#manual-bug-labels')?.value.trim() || '',
@@ -810,7 +865,7 @@ async function enhanceManualBugIssue(modal) {
 
 async function submitManualBugIssue(modal) {
   const button = modal.querySelector('#manual-bug-submit');
-  const { title, description, requirementVersion, labels, assigneeIds, assigneeUsernames, attachments } = readManualBugDraft(modal);
+  const { title, description, requirementVersion, milestoneId, labels, assigneeIds, assigneeUsernames, attachments } = readManualBugDraft(modal);
 
   if (!title || title === '[Bug]') {
     setManualBugResult(modal, '请填写 Issue 标题');
@@ -832,7 +887,7 @@ async function submitManualBugIssue(modal) {
     const response = await fetch(`${API_BASE}/gitlab/issues`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, requirementVersion, labels, assigneeIds, assigneeUsernames, attachments })
+      body: JSON.stringify({ title, description, requirementVersion, milestoneId, labels, assigneeIds, assigneeUsernames, attachments })
     });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || '提交 GitLab Issue 失败');

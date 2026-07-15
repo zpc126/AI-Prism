@@ -1,3 +1,7 @@
+<!-- input: 模型配置、系统提示词、工具集合和 PI SDK -->
+<!-- output: 普通用例执行与专项探索可复用的 Agent 会话 -->
+<!-- position: server/pi 模块说明 -->
+
 # PI Agent 集成
 
 Prism 接入 PI SDK，获得超级智能体能力。
@@ -17,7 +21,7 @@ Prism 前端 → Express API → PI SDK → PI Agent
 
 | 文件 | 功能 |
 |------|------|
-| `pi-agent.js` | Prism PI Agent 核心服务 |
+| `pi-agent.js` | Prism PI Agent 核心服务，支持调用方传入专项系统提示词和受限工具集合 |
 | `routes.js` | HTTP API 路由 |
 | `qa-skill.md` | QA 专用 Skill |
 

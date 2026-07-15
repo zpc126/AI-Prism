@@ -30,3 +30,26 @@ Corrections, insights, knowledge gaps, and best practices captured for future Co
 - Tags: adb, android, cross-device
 
 ---
+
+## [LRN-20260710-001] correction
+
+**Logged**: 2026-07-10T11:27:10Z
+**Priority**: high
+**Status**: pending
+**Area**: config
+
+### Summary
+The Scout instance with the existing GitLab, Bug, history, scripts, and user data is outputs/scout-web; work/scout-web is a different incomplete copy.
+
+### Details
+Editing or starting work/scout-web makes the user-visible app appear to lose existing features. Implementation, verification, and npm run dev for this project must target outputs/scout-web unless the user explicitly redirects the workspace.
+
+### Suggested Action
+Before editing or restarting Scout, compare the screenshot navigation and run git status in outputs/scout-web, then launch that directory on port 3000.
+
+### Metadata
+- Source: manual_capture
+- Related Files: AGENTS.md
+- Tags: workspace, runtime-copy
+
+---

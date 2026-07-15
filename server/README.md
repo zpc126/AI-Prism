@@ -1,3 +1,7 @@
+<!-- input: Prism 后端模块、探索运行策略、路由和运行时服务边界 -->
+<!-- output: 服务端目录结构、限次/持续探索、核心模块与 API 索引 -->
+<!-- position: server 目录架构说明 -->
+
 # Server
 
 > Prism 后端服务
@@ -6,8 +10,8 @@
 
 ```
 server/
-├── index.js              # Web 服务入口、静态资源、图片请求、分析报告分享与历史查询、局域网监听与路由注册
-├── config.js             # Web-only 配置中心
+├── index.js              # Web 服务入口、静态资源、探索测试、报告分享与路由注册
+├── config.js             # Web-only 配置中心，含 GitLab 脚本发布配置
 ├── ai/                   # AI 能力
 │   ├── generate.js       # 用例生成、Base URL 规范化与流式响应校验
 │   └── README.md
@@ -44,7 +48,14 @@ server/
 │   ├── pi-runner.js      # PI 引擎适配器
 │   ├── auto-runner.js    # 自动化执行器
 │   ├── enhanced-runner.js # 增强执行器
+│   ├── pi-engine-runner.js # 脚本优先、旧脚本兼容与 PI 智能执行器
 │   ├── batch-executor.js # 批量执行器
+│   └── README.md
+├── exploration/          # 用户主动发起的 Web AI 探索
+│   ├── runner.js         # 同源/只读保护、限次/持续运行、可选时长与结果解析
+│   ├── routes.js         # 运行策略规范、SSE 启停、历史和截图证据 API
+│   ├── store.js          # 兼容旧表的探索策略与结果 SQLite 存储
+│   ├── runner.test.js    # 核心安全规则单元测试
 │   └── README.md
 ├── evaluation/           # Web E2E 评估
 │   ├── runner.js         # Chromium 评估执行器
@@ -61,6 +72,8 @@ server/
     ├── sessions.js       # 会话 CRUD
     ├── stats.js          # 首页统计累计与汇总
     ├── routes.js         # API 路由
+    ├── automation-scripts.js # 自动化脚本库、旧脚本兼容与脚本包导出
+    ├── script-routes.js  # 脚本库 CRUD、GitLab 提交与单脚本回放
     └── README.md
 ```
 
@@ -122,6 +135,10 @@ Prism 接入 PI SDK，获得超级智能体能力。
 | `/api/pi/chat` | POST | 对话式交互 |
 | `/api/pi/status` | GET | 获取 Prism Agent 状态 |
 | `/api/pi/reset` | POST | 重置 Prism Agent |
+| `/api/exploration/run` | POST | 发起一次受控 Web AI 探索 |
+| `/api/exploration/runs` | GET | 查询探索历史 |
+| `/api/exploration/runs/:id/stop` | POST | 停止运行中的探索任务 |
+| `/api/exploration/evidence/:filename` | GET | 读取探索截图证据 |
 | `/api/device/adb` | GET | 查询 Android 真机连接状态 |
 | `/api/device/adb/connect` | POST | 连接无线 ADB 设备 |
 | `/api/device/adb/pair` | POST | 使用 6 位配对码完成无线调试配对 |

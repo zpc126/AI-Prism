@@ -1,5 +1,5 @@
-// input: GitLab 配置、报告失败结果、手工 Bug 草稿、需求版本、项目成员查询、图片附件与 AI 完善请求
-// output: GitLab Issue 配置、草稿、报告 Issue、项目成员、带去重需求版本的手工 Bug 提交、图片附件上传与 AI 完善 API
+// input: GitLab 配置、报告失败结果、手工 Bug 草稿、里程碑、项目成员查询、图片附件与 AI 完善请求
+// output: GitLab Issue 配置、草稿、报告 Issue、项目成员/里程碑、手工 Bug 提交、图片附件上传与 AI 完善 API
 // position: GitLab Issue 集成路由
 
 const express = require('express');
@@ -18,7 +18,7 @@ const {
   getTestResult,
 } = require('../../reports/report-store');
 const { buildIssueDraft } = require('./issue-builder');
-const { createIssue, listProjectMembers, testConnection, uploadProjectFile } = require('./client');
+const { createIssue, listProjectMembers, listProjectMilestones, testConnection, uploadProjectFile } = require('./client');
 const { loadGitLabConfig, redactGitLabConfig, saveGitLabConfig } = require('./config');
 
 function handleError(res, error, status = 500) {
@@ -144,24 +144,6 @@ function appendAttachmentNotes(description, uploaded = [], failed = []) {
   return `${description || ''}\n\n${sections.join('\n\n')}`;
 }
 
-function removeRequirementVersionSections(description = '') {
-  return String(description || '')
-    .replace(/(^|\n)##\s*需求版本[^\n]*\n[\s\S]*?(?=\n##\s+|$)/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function ensureRequirementVersionSection(description = '', requirementVersion = '') {
-  const version = String(requirementVersion || '').trim();
-  const text = removeRequirementVersionSections(description);
-  if (!version) return text;
-  const marker = '\n## 摘要';
-  if (text.includes(marker)) {
-    return text.replace(marker, `\n## 需求版本\n${version}\n${marker}`);
-  }
-  return `${text}\n\n## 需求版本\n${version}`;
-}
-
 function normalizeManualAttachments(attachments = []) {
   if (!Array.isArray(attachments)) return [];
   return attachments
@@ -237,7 +219,7 @@ async function enhanceManualBugDraft(input = {}) {
   const systemPrompt = [
     '你是资深 QA，负责把用户很粗略的 Bug 描述整理成可提交 GitLab Issue 的中文 Markdown。',
     '必须严格保留用户模板的标题层级：# Bug、摘要、当前行为、期望行为、复现步骤、影响范围、证据、父 case / epic、验证信号。',
-    '如果用户提供了需求版本，只能包含一个“## 需求版本”小节，不要重复。',
+    '需求版本由 GitLab 里程碑字段记录，只作为理解上下文，不要在 Markdown 中新增“需求版本”小节。',
     '不要编造项目名、用户、日志、trace ID、父 case、真实接口响应；不确定的内容写“待确认”。',
     '如果用户提供了图片，请把图片中能确认的界面、报错、字段、按钮、状态写进当前行为、复现步骤或证据里。',
     '复现步骤要尽量可执行；影响范围表格必须保留；输出必须是 JSON，不要输出解释文字。',
@@ -264,10 +246,7 @@ async function enhanceManualBugDraft(input = {}) {
   const parsed = parseJsonObject(raw);
   return {
     title: String(parsed.title || input.title || '[Bug] 待确认').trim(),
-    description: ensureRequirementVersionSection(
-      String(parsed.description || input.description || '').trim(),
-      input.requirementVersion
-    ),
+    description: String(parsed.description || input.description || '').trim(),
   };
 }
 
@@ -316,6 +295,19 @@ router.get('/users', async (req, res) => {
   }
 });
 
+router.get('/milestones', async (req, res) => {
+  try {
+    const config = getGitLabConfigForReport(req);
+    if (!config.baseUrl || !config.projectId || !config.token) {
+      return res.status(400).json({ success: false, error: 'GitLab 配置不完整，请先到设置中填写' });
+    }
+    const milestones = await listProjectMilestones(config, 'active');
+    res.json({ success: true, milestones });
+  } catch (error) {
+    handleError(res, error, error.status || 500);
+  }
+});
+
 router.post('/issues', async (req, res) => {
   try {
     const config = getGitLabConfigForReport(req);
@@ -327,6 +319,7 @@ router.post('/issues', async (req, res) => {
       title: String(req.body?.title || '').trim(),
       description: String(req.body?.description || '').trim(),
       requirementVersion: String(req.body?.requirementVersion || '').trim(),
+      milestoneId: req.body?.milestoneId,
       labels: req.body?.labels || config.labels,
       assigneeIds: req.body?.assigneeIds || config.assigneeIds,
       assigneeUsernames: req.body?.assigneeUsernames || '',
@@ -340,7 +333,6 @@ router.post('/issues', async (req, res) => {
     }
 
     const attachmentResult = await uploadManualAttachments(config, req.body?.attachments);
-    draft.description = ensureRequirementVersionSection(draft.description, draft.requirementVersion);
     draft.description = appendAttachmentNotes(draft.description, attachmentResult.uploaded, attachmentResult.failed);
     const issue = await createIssue(config, draft);
     res.json({ success: true, issue, attachments: attachmentResult });

@@ -431,7 +431,7 @@ class PIEngineRunner {
 
     for (let index = 0; index < script.steps.length; index++) {
       this.ensureNotStopped();
-      const action = script.steps[index];
+      const action = this.normalizeRuntimeStep(script.steps[index]);
       const startedAt = Date.now();
       const description = this.describeScriptAction(action);
       onLog({ type: 'info', text: `脚本 ${index + 1}/${script.steps.length}：${description}` });
@@ -470,6 +470,9 @@ class PIEngineRunner {
             }
             break;
           }
+          case 'screenshot':
+            await this.takeScreenshot(`script_step_${index + 1}`);
+            break;
           default:
             throw new Error(`不支持的脚本动作：${action.action}`);
         }
@@ -513,6 +516,43 @@ class PIEngineRunner {
     return { success: true, steps: stepResults };
   }
 
+  normalizeRuntimeStep(step = {}) {
+    if (typeof step === 'string') {
+      return { action: 'click', target: step, value: '' };
+    }
+    const rawAction = String(step.action || step.type || step.command || 'click').trim().toLowerCase();
+    const actionAliases = {
+      goto: 'navigate',
+      go_to: 'navigate',
+      open: 'navigate',
+      visit: 'navigate',
+      input: 'fill',
+      type: 'fill',
+      set_value: 'fill',
+      tap: 'click',
+      press: 'click',
+      assert: 'assert_text',
+      verify: 'assert_text',
+      check_text: 'assert_text',
+    };
+    const action = actionAliases[rawAction] || rawAction || 'click';
+    const target = step.target
+      ?? step.url
+      ?? step.selector
+      ?? step.text
+      ?? step.label
+      ?? step.name
+      ?? step.desc
+      ?? '';
+    const value = step.value ?? step.input ?? step.content ?? step.textValue ?? '';
+    return {
+      ...step,
+      action,
+      target: String(target || ''),
+      value: value === undefined || value === null ? '' : String(value),
+    };
+  }
+
   ensureNotStopped() {
     if (!this.stopped) return;
     const error = new Error('用户已停止执行');
@@ -529,6 +569,7 @@ class PIEngineRunner {
       wait: '等待',
       scroll: '滚动',
       assert_text: '验证页面文本',
+      screenshot: '截图',
     };
     const value = action.action === 'fill' && action.value ? `：${action.value}` : '';
     return `${labels[action.action] || action.action} ${action.target || ''}${value}`.trim();
